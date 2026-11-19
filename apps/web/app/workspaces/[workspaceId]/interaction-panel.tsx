@@ -1,11 +1,19 @@
 'use client'
 
-import { GeneratedContent } from './generated-content'
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
+import { DesignIcon } from '../../components/aipollo'
+import { useWorkspaceLanguage } from '../../components/workspace-language'
 import { api, errorMessage } from '../../lib/api'
 import type { DocumentItem } from './document-shelf'
+import { GeneratedContent } from './generated-content'
+import type { CitationTarget } from './pdf-preview'
 
 type Mode = 'ASK' | 'PLAN' | 'AGENT'
+const modes = [
+  { value: 'ASK', label: 'Ask', vietnamese: 'Hỏi', viHint: 'Trò chuyện · hỏi đáp theo nguồn', icon: 'ask', hint: 'Chat · grounded Q&A · read-only' },
+  { value: 'PLAN', label: 'Plan', vietnamese: 'Lập kế hoạch', viHint: 'Xem xét kế hoạch trước khi phê duyệt', icon: 'plan', hint: 'Review-only · nothing runs until you accept' },
+  { value: 'AGENT', label: 'Agent', vietnamese: 'Agent', viHint: 'Thực thi có giới hạn · theo dõi tiến độ', icon: 'agent', hint: 'Bounded execution · step progress' },
+] as const
 type Capability = 'LEARN' | 'RESEARCH' | 'WRITE'
 const tasks: Record<Capability, Record<string, string>> = {
   LEARN: {
@@ -36,16 +44,19 @@ type Objective = { query: string; document_ids: string[]; capability: Capability
 type Plan = {
   plan_id: string
   plan_version: number
+  accepted_at: string | null
   state: 'REVIEW' | 'ACCEPTED' | 'CANCELLED'
   objective: Objective
   steps: { tool: string; action: string }[]
   expected_outputs: string[]
 }
-type Citation = { chunk_id: string; document_id: string; page: number; name: string }
+type Citation = CitationTarget & { chunk_id: string; name: string }
 type Result = { kind?: string; claims: { text: string; fields?: Record<string, string>; citations: Citation[] }[]; insufficient_evidence: boolean }
 type Run = {
   run_id: string
   conversation_id: string | null
+  interaction: Mode
+  plan_version: number | null
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
   step: 'retrieve' | 'compose' | null
   result: Result | null
@@ -54,15 +65,24 @@ type Run = {
 }
 type Conversation = { conversation_id: string; name: string }
 
-export function InteractionPanel({ workspaceId, documents, canPublish, onCitation }: {
+export function InteractionPanel({
+  workspaceId, workspaceName, documents, selectedSources, setSelectedSources, onSourcesLock, showHistory, canPublish, onCitation,
+}: {
   workspaceId: string
+  workspaceName: string
   documents: DocumentItem[]
+  selectedSources: string[]
+  setSelectedSources: Dispatch<SetStateAction<string[]>>
+  onSourcesLock: (locked: boolean) => void
+  showHistory: boolean
   canPublish: boolean
-  onCitation: (documentId: string, page: number) => void
+  onCitation: (target: CitationTarget) => void
 }) {
   const base = '/v1/workspaces/' + workspaceId
+  const { text } = useWorkspaceLanguage()
   const [capability, setCapability] = useState<Capability>('LEARN')
   const [published, setPublished] = useState<string>()
+  const [copied, setCopied] = useState<string>()
   const [mode, setMode] = useState<Mode>('ASK')
   const [plan, setPlan] = useState<Plan>()
   const [run, setRun] = useState<Run>()
@@ -73,14 +93,30 @@ export function InteractionPanel({ workspaceId, documents, canPublish, onCitatio
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [selectedSources, setSelectedSources] = useState<string[]>([])
+  const queryField = useRef<HTMLTextAreaElement>(null)
+  const locked = busy || activeId !== undefined
+
+  useEffect(() => onSourcesLock(locked), [locked, onSourcesLock])
+
+  useEffect(() => {
+    if (!showHistory) return
+    let current = true
+    void api<Conversation[]>(base + '/conversations')
+      .then(items => { if (current) setAvailable(items) })
+      .catch(failure => { if (current) setError(errorMessage(failure)) })
+    return () => { current = false }
+  }, [base, showHistory])
+
+  useEffect(() => {
+    if (editing) queryField.current?.focus()
+  }, [editing])
 
   useEffect(() => {
     if (!activeId) return
     const events = new EventSource(base + '/runs/' + activeId + '/events')
     events.onerror = () => {
       void api<Run>(base + '/runs/' + activeId).then(current => {
-        setRun(current)
+        setRun(prior => ({ ...current, query: current.query ?? prior?.query }))
         if (current.status !== 'queued' && current.status !== 'running') {
           events.close()
           setActiveId(undefined)
@@ -93,7 +129,7 @@ export function InteractionPanel({ workspaceId, documents, canPublish, onCitatio
     }
     events.onmessage = (event: MessageEvent<string>) => {
       const current = JSON.parse(event.data) as Run
-      setRun(current)
+      setRun(prior => ({ ...current, query: current.query ?? prior?.query }))
       if (current.status !== 'queued' && current.status !== 'running') {
         events.close()
         setActiveId(undefined)
@@ -125,9 +161,9 @@ export function InteractionPanel({ workspaceId, documents, canPublish, onCitatio
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const form = new FormData(event.currentTarget)
-    const formSources = form.getAll('source').map(String)
-    const document_ids = selectedSources.length ? selectedSources : formSources
+    const element = event.currentTarget
+    const form = new FormData(element)
+    const document_ids = selectedSources.filter(id => documents.some(doc => doc.document_id === id))
     const input: Objective = {
       query: String(form.get('query')).trim(),
       document_ids,
@@ -149,6 +185,7 @@ export function InteractionPanel({ workspaceId, documents, canPublish, onCitatio
       } else if (mode === 'PLAN') {
         const created = await api<Plan>(base + '/plans', 'POST', input, crypto.randomUUID())
         setPlan(created)
+        if (queryField.current && queryField.current === element.elements.namedItem('query')) queryField.current.value = ''
       } else {
         const fresh = await api<Run>(base + '/runs', 'POST', {
           mode,
@@ -156,6 +193,7 @@ export function InteractionPanel({ workspaceId, documents, canPublish, onCitatio
           conversation_id: mode === 'ASK' ? conversation : undefined,
         }, crypto.randomUUID())
         begin({ ...fresh, query: input.query })
+        if (queryField.current && queryField.current === element.elements.namedItem('query')) queryField.current.value = ''
       }
     })
   }
@@ -163,11 +201,12 @@ export function InteractionPanel({ workspaceId, documents, canPublish, onCitatio
   function review(action: 'accept' | 'regenerate' | 'cancel' | 'run', selected: Plan) {
     void perform(async () => {
       if (action === 'run') {
-        begin(await api<Run>(base + '/runs', 'POST', {
+        const fresh = await api<Run>(base + '/runs', 'POST', {
           mode: 'PLAN',
           plan_id: selected.plan_id,
           plan_version: selected.plan_version,
-        }, crypto.randomUUID()))
+        }, crypto.randomUUID())
+        begin({ ...fresh, query: fresh.query ?? selected.objective.query })
       } else {
         const path = base + '/plans/' + selected.plan_id + '/' + action
         const updated = await api<Plan>(path, 'POST', { plan_version: selected.plan_version }, crypto.randomUUID())
@@ -176,397 +215,232 @@ export function InteractionPanel({ workspaceId, documents, canPublish, onCitatio
     })
   }
 
-  function answers(item: Run) {
-    const isRunning = item.status === 'running'
-    const isQueued = item.status === 'queued'
-    const isCancelled = item.status === 'cancelled'
-    const label = isRunning
-      ? item.step === 'compose'
-        ? 'Writing answer…'
-        : 'Searching selected sources…'
-      : isQueued
-      ? 'Run queued.'
-      : isCancelled
-      ? 'Run cancelled.'
-      : null
+  function cancelRun() {
+    if (!activeId) return
+    void perform(async () => {
+      const stopped = await api<Run>(base + '/runs/' + activeId + '/cancel', 'POST')
+      setRun(prior => ({ ...stopped, query: stopped.query ?? prior?.query }))
+      setActiveId(undefined)
+    })
+  }
 
+  function openConversation(item: Conversation) {
+    void perform(async () => {
+      setHistory(await api<Run[]>(base + '/conversations/' + item.conversation_id))
+      setConversation(item.conversation_id)
+      setRun(undefined)
+      setMode('ASK')
+    })
+  }
+
+  function newChat() {
+    setConversation(undefined)
+    setRun(undefined)
+    setHistory([])
+    setPlan(undefined)
+    setEditing(false)
+    setMode('ASK')
+  }
+
+  function answers(item: Run) {
+    const active = item.status === 'running' || item.status === 'queued'
+    const composing = item.step === 'compose'
+    const searching = item.step === 'retrieve'
+    const stages = [
+      { label: 'Search selected sources', done: composing, running: searching },
+      { label: 'Compose grounded response', done: false, running: composing },
+    ]
     return (
-      <article key={item.run_id} className="form-stack run-result-card">
-        {item.query && <p><strong>{item.query}</strong></p>}
-        {(isRunning || isQueued) && (
-          <div className="run-progress-box">
-            <div className="run-step-indicator">
-              <span className="pulse-dot" />
-              <span>
-                {isRunning
-                  ? item.step === 'compose'
-                    ? 'Step 2/2: Composing synthesis…'
-                    : 'Step 1/2: Searching selected sources…'
-                  : 'Run queued in execution pipeline…'}
+      <article key={item.run_id} className="aipollo-turn">
+        {item.query && <p className="chat-query">{item.query}</p>}
+        {active && <section className="run-card" aria-label="Execution progress">
+          <header className="aipollo-section-heading">
+            <h2>{item.status === 'queued' ? 'Run queued' : 'Run in progress'}
+              <span className="badge badge-success">{item.status === 'running' ? 'Executing' : 'Queued'}</span>
+            </h2>
+            {activeId === item.run_id && <button type="button" className="danger sm" disabled={busy} onClick={cancelRun}>Cancel run</button>}
+          </header>
+          {item.plan_version && <p className="muted">Accepted plan v{item.plan_version} · Run {item.run_id.slice(0, 8)}</p>}
+          <progress max={stages.length} value={stages.filter(step => step.done).length} aria-label="Completed steps" />
+          <ol className="run-stages">
+            {stages.map(step => <li key={step.label} data-running={step.running}>
+              <DesignIcon name={step.done ? 'step-completed' : step.running ? 'step-running' : 'clock'} />
+              <span>{step.label}</span>
+              <span className={`badge badge-${step.done ? 'success' : step.running ? 'info' : 'neutral'}`}>
+                {step.done ? 'Completed' : step.running ? 'Running' : 'Pending'}
               </span>
+            </li>)}
+          </ol>
+        </section>}
+        {item.status === 'cancelled' && <p role="status">Run cancelled.</p>}
+        {item.error_code && <p role="alert"><DesignIcon name="error" /> Run failed. {item.error_code.replaceAll('_', ' ')}.</p>}
+        {item.result?.insufficient_evidence && <div className="approval-notice" role="status">
+          <DesignIcon name="warning" /><div><strong>Not enough evidence in the selected sources</strong>
+            <p>Choose more sources and try again.</p></div>
+        </div>}
+        {!!item.result?.claims.length && <div className="assistant-response">
+          <div className="response-brand"><DesignIcon name="assistant" /> Super Agentic RAG</div>
+          {item.result.claims.map((claim, index) => (
+            <div key={index} className="claim-row">
+              <div className="claim-copy"><GeneratedContent text={claim.text} fields={claim.fields} kind={item.result?.kind} /></div>
+              <div className="claim-citations">
+                {claim.citations.filter(citation => documents.some(doc => doc.document_id === citation.document_id))
+                  .map(citation => <button type="button" className="citation-pill" key={citation.chunk_id}
+                    onClick={() => onCitation(citation)}>
+                    <DesignIcon name="citation" /><span>{citation.name}, page {citation.page}</span>
+                  </button>)}
+              </div>
             </div>
-            {label && <p role="status">{label}</p>}
-          </div>
-        )}
-        {!isRunning && !isQueued && label && <p role="status">{label}</p>}
-        {item.error_code && (
-          <p role="alert">Run failed. {item.error_code.replaceAll('_', ' ')}.</p>
-        )}
-        {item.result?.insufficient_evidence && (
-          <p>The selected sources do not contain enough evidence to answer.</p>
-        )}
-        {canPublish && !!item.result?.claims.length && (
-          <form
-            className="inline-form"
-            onSubmit={event => {
+          ))}
+          <div className="response-actions">
+          <button type="button" className="secondary sm" onClick={() => {
+            const content = item.result?.claims.map(claim => {
+              const sources = claim.citations.map(citation => citation.name + ', page ' + citation.page).join('; ')
+              return sources ? claim.text + ' (' + sources + ')' : claim.text
+            }).join('\n\n') ?? ''
+            void navigator.clipboard.writeText(content).then(() => setCopied(item.run_id))
+              .catch(failure => setError(errorMessage(failure)))
+          }}>{copied === item.run_id ? 'Copied' : 'Copy'}</button>
+          {canPublish && <details className="save-response">
+            <summary>{published === item.run_id ? 'Artifact saved' : 'Save as artifact'}</summary>
+            <form className="inline-form" onSubmit={event => {
               event.preventDefault()
               const name = String(new FormData(event.currentTarget).get('name')).trim()
               void perform(async () => {
                 await api(base + '/artifacts', 'POST', { name, run_id: item.run_id })
                 setPublished(item.run_id)
               })
-            }}
-          >
-            <label>
-              Shared artifact name
-              <input
-                name="name"
-                required
-                maxLength={150}
-                defaultValue={item.query?.slice(0, 150)}
-              />
-            </label>
-            <button disabled={busy || published === item.run_id}>
-              {published === item.run_id ? 'Saved' : 'Save as artifact'}
-            </button>
-          </form>
-        )}
-        {item.result?.claims.map((claim, index) => (
-          <div key={index} className="form-stack claim-block">
-            <GeneratedContent text={claim.text} fields={claim.fields} kind={item.result?.kind} />
-            <div className="actions">
-              {claim.citations
-                .filter(citation => documents.some(doc => doc.document_id === citation.document_id))
-                .map(citation => (
-                  <button
-                    type="button"
-                    className="secondary"
-                    key={citation.chunk_id}
-                    onClick={() => onCitation(citation.document_id, citation.page)}
-                  >
-                    {citation.name}, page {citation.page}
-                  </button>
-                ))}
-            </div>
+            }}>
+              <label>Shared artifact name<input name="name" required maxLength={150}
+                defaultValue={item.query?.slice(0, 150)} /></label>
+              <button className="sm" disabled={busy || published === item.run_id}>Save artifact</button>
+            </form>
+          </details>}
           </div>
-        ))}
+        </div>}
       </article>
     )
   }
 
-  const effectiveMode = editing ? 'PLAN' : mode
+  const effectiveMode = editing ? 'PLAN' : activeId && run?.interaction === 'PLAN' ? 'AGENT' : mode
+  const currentMode = modes.find(item => item.value === effectiveMode) ?? modes[0]
+  const visiblePlan = effectiveMode === 'PLAN' || run?.status === 'cancelled' ? plan : undefined
+  function editPlan(target: Plan) {
+    setCapability(target.objective.capability)
+    setSelectedSources(target.objective.document_ids.filter(id => documents.some(doc => doc.document_id === id)))
+    setEditing(true)
+  }
 
   return (
-    <section
-      className="panel form-stack workspace-assistant-region"
-      aria-labelledby="workspace-interaction-heading"
-      aria-label="Workspace assistant"
-    >
-      <h3 id="workspace-interaction-heading">Workspace assistant</h3>
+    <section className="aipollo-assistant" aria-label="Workspace assistant" data-mode={effectiveMode}>
+      <header className="aipollo-section-heading">
+        <div><h1>{showHistory ? text('History', 'Lịch sử') : workspaceName}</h1><p>{showHistory ? workspaceName : text(currentMode.hint, currentMode.viHint)}</p></div>
+        {!showHistory && <div className="assistant-heading-badges">
+          <span className="badge mode-badge"><DesignIcon name={currentMode.icon} /> {text(currentMode.label + ' mode', currentMode.vietnamese)}</span>
+          <span className="badge badge-neutral"><DesignIcon name="paper-tab" /> {selectedSources.length} of {documents.length} sources</span>
+        </div>}
+      </header>
+      {error && <p role="alert"><DesignIcon name="error" /> {error}</p>}
 
-      {/* Mode & Capability guidance */}
-      <div className="assistant-mode-summary">
-        <span className="badge badge-info">Mode: {effectiveMode}</span>
-        <span className="badge badge-muted">Capability: {capability}</span>
+      {showHistory && <div className="conversation-picker form-stack">
+        {available && (available.length ? <ul>{available.map(item => <li key={item.conversation_id}>
+          <button type="button" className="secondary sm" disabled={locked} onClick={() => openConversation(item)}>
+            <DesignIcon name="chats" /> {item.name}
+          </button>
+        </li>)}</ul> : <p className="muted">There are no saved chats yet.</p>)}
+        {!available && !error && <p role="status">Loading chats…</p>}
+      </div>}
+
+      <div className="assistant-thread">
+        {history.map(answers)}
+        {visiblePlan && <>
+          <p className="chat-query">{visiblePlan.objective.query}</p>
+          <article className="review-plan">
+            <header className="plan-heading">
+              <h2 aria-label={`Plan version ${visiblePlan.plan_version}`}>{text('Proposed plan', 'Kế hoạch đề xuất')}</h2>
+              <span className={`badge badge-${visiblePlan.state === 'ACCEPTED' ? 'success' : 'primary'}`}>
+                {visiblePlan.state === 'REVIEW' ? 'Ready for review' : visiblePlan.state === 'ACCEPTED' ? 'Accepted' : 'Cancelled'}
+              </span>
+              <span className="badge badge-neutral">v{visiblePlan.plan_version}</span>
+            </header>
+            {visiblePlan.state !== 'CANCELLED' && <ol className="plan-lifecycle" aria-label="Plan lifecycle">
+              {[
+                ['REVIEW', 'Ready for review'],
+                ['ACCEPTED', 'Accepted'],
+              ].map(([state, label]) => (
+                <li key={state} aria-current={visiblePlan.state === state ? 'step' : undefined}>{label}</li>
+              ))}
+            </ol>}
+            <p className="plan-goal"><strong>GOAL</strong> {visiblePlan.objective.query}</p>
+            <ol className="plan-steps">{visiblePlan.steps.map((step, index) => (
+              <li key={index}>
+                <span className="plan-step-number">{index + 1}</span>
+                <span>{step.action}</span>
+                <span className="badge badge-neutral">{step.tool}</span>
+              </li>
+            ))}</ol>
+            <dl className="plan-details">
+              <div><dt>Scope</dt><dd>{visiblePlan.objective.document_ids.map(id =>
+                documents.find(doc => doc.document_id === id)?.name ?? 'Unavailable source').join(', ')}</dd></div>
+              <div><dt>Outputs</dt><dd>{visiblePlan.expected_outputs.join(', ')}</dd></div>
+              <div><dt>Approval</dt><dd>{visiblePlan.accepted_at
+                ? new Date(visiblePlan.accepted_at).toLocaleString() : 'Required for this version'}</dd></div>
+            </dl>
+            {visiblePlan.state === 'CANCELLED' ? <p>Plan cancelled.</p> : <div className="plan-actions">
+              <button type="button" className="secondary sm" disabled={locked} onClick={() => editPlan(visiblePlan)}>{text('Edit plan', 'Chỉnh sửa')}</button>
+              <button type="button" className="secondary sm" disabled={locked} onClick={() => review('regenerate', visiblePlan)}>{text('Regenerate', 'Tạo lại')}</button>
+              <button type="button" className="danger sm plan-cancel" disabled={locked} onClick={() => review('cancel', visiblePlan)}>{text('Cancel plan', 'Hủy kế hoạch')}</button>
+              {visiblePlan.state === 'REVIEW'
+                ? <button type="button" className="sm" disabled={locked} onClick={() => review('accept', visiblePlan)}>{text('Accept plan', 'Duyệt kế hoạch')}</button>
+                : <button type="button" className="sm" disabled={locked} onClick={() => review('run', visiblePlan)}>{text('Run accepted plan', 'Chạy kế hoạch đã duyệt')}</button>}
+            </div>}
+          </article>
+          {visiblePlan.state === 'REVIEW' && <p className="approval-notice">
+            <DesignIcon name="approval-lock" /> No execution has started. Accept this exact version to enable execution. Editing creates a new version.
+          </p>}
+        </>}
+        {run && answers(run)}
       </div>
 
-      <div className="actions">
-        <button
-          type="button"
-          className="secondary"
-          disabled={busy || activeId !== undefined}
-          onClick={() => void perform(async () => setAvailable(await api<Conversation[]>(base + '/conversations')))}
-        >
-          Chat history
-        </button>
-        {conversation && (
-          <button
-            type="button"
-            className="secondary"
-            disabled={busy || activeId !== undefined}
-            onClick={() => {
-              setConversation(undefined)
-              setRun(undefined)
-              setHistory([])
-            }}
-          >
-            New chat
-          </button>
-        )}
-      </div>
-
-      {available && (
-        <ul className="conversations-list">
-          {available.map(item => (
-            <li key={item.conversation_id}>
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy || activeId !== undefined}
-                onClick={() =>
-                  void perform(async () => {
-                    setHistory(await api<Run[]>(base + '/conversations/' + item.conversation_id))
-                    setConversation(item.conversation_id)
-                    setRun(undefined)
-                    setMode('ASK')
-                    setAvailable(undefined)
-                  })
-                }
-              >
-                {item.name}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {/* Assistant Form */}
-      <form
-        className="form-stack assistant-form"
-        onSubmit={submit}
-        key={editing ? `edit-${plan?.plan_version}` : 'new-form'}
-      >
-        <label>
-          Mode
-          <select
-            aria-label="Mode"
-            value={effectiveMode}
-            disabled={editing || busy || activeId !== undefined}
-            onChange={event => setMode(event.currentTarget.value as Mode)}
-          >
-            <option value="ASK">Ask</option>
-            <option value="PLAN">Plan</option>
-            <option value="AGENT">Agent</option>
-          </select>
-        </label>
-
-        <label>
-          Capability
-          <select
-            aria-label="Capability"
-            value={capability}
-            disabled={busy || activeId !== undefined}
-            onChange={event => setCapability(event.currentTarget.value as Capability)}
-          >
-            <option value="LEARN">Learn</option>
-            <option value="RESEARCH">Research</option>
-            <option value="WRITE">Write</option>
-          </select>
-        </label>
-
-        <label>
-          Output
-          <select
-            aria-label="Output"
-            name="task"
-            key={capability}
-            disabled={busy || activeId !== undefined}
-            defaultValue={editing && plan?.objective.capability === capability ? plan.objective.task : 'answer'}
-          >
-            {Object.entries(tasks[capability]).map(([value, label]) => (
-              <option key={value} value={value}>{label}</option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          Question or objective
-          <textarea
-            aria-label="Question or objective"
-            name="query"
-            minLength={2}
-            maxLength={1800}
-            required
-            disabled={busy || activeId !== undefined}
-            defaultValue={editing ? plan?.objective.query : ''}
-          />
-        </label>
-
-        <fieldset disabled={busy || activeId !== undefined}>
-          <legend>Assistant sources</legend>
-          <div className="sources-checkbox-list">
-            {documents.map(doc => {
-              const isChecked = selectedSources.includes(doc.document_id) ||
-                (editing && plan ? plan.objective.document_ids.includes(doc.document_id) : false)
-              return (
-                <label className="check-option" key={doc.document_id}>
-                  <input
-                    type="checkbox"
-                    name="source"
-                    value={doc.document_id}
-                    checked={isChecked}
-                    onChange={e => {
-                      const checked = e.currentTarget.checked
-                      setSelectedSources(current => {
-                        const baseSources = editing && plan && !current.length ? plan.objective.document_ids : current
-                        return checked
-                          ? [...new Set([...baseSources, doc.document_id])]
-                          : baseSources.filter(id => id !== doc.document_id)
-                      })
-                    }}
-                  />{' '}
-                  {doc.name}
-                </label>
-              )
-            })}
+      <form hidden={showHistory} className="assistant-composer" onSubmit={submit} key={editing ? `edit-${plan?.plan_version}` : 'new-form'}>
+        <textarea ref={queryField} aria-label="Question or objective" name="query" minLength={2} maxLength={1800}
+          required rows={2} disabled={locked} defaultValue={editing ? plan?.objective.query : ''}
+          placeholder={editing ? text('Tell the agent how to adjust this plan…', 'Cho biết cần điều chỉnh kế hoạch thế nào…')
+            : effectiveMode === 'PLAN' ? text('Describe the goal for your plan…', 'Mô tả mục tiêu của kế hoạch…') : text('Ask a question about your selected sources…', 'Đặt câu hỏi về các nguồn đã chọn…')} />
+        <div className="composer-options">
+          <div className="composer-modes" role="group" aria-label="Mode">
+            {modes.map(item => <button key={item.value} type="button" disabled={editing || locked}
+              aria-pressed={effectiveMode === item.value} onClick={() => setMode(item.value)}>{text(item.label, item.vietnamese)}</button>)}
           </div>
-
-          {/* Clearly display selected sources before sending */}
-          <div className="selected-sources-summary">
-            <strong>Selected sources ({
-              selectedSources.length || (editing && plan ? plan.objective.document_ids.length : 0)
-            }):</strong>
-            {((selectedSources.length === 0 && (!editing || !plan?.objective.document_ids.length)) ? (
-              <span className="muted"> Select 1 to 100 sources above.</span>
-            ) : (
-              <div className="selected-sources-chips">
-                {(selectedSources.length ? selectedSources : (plan?.objective.document_ids ?? [])).map(id => {
-                  const doc = documents.find(d => d.document_id === id)
-                  return doc ? (
-                    <span key={id} className="badge badge-info">
-                      {doc.name}
-                    </span>
-                  ) : null
-                })}
-              </div>
-            ))}
-          </div>
-        </fieldset>
-
-        <div className="actions">
-          <button disabled={busy || activeId !== undefined}>
-            {editing ? 'Save new version' : mode === 'PLAN' ? 'Create plan' : 'Send'}
+          <span className="badge badge-neutral composer-source-count"><DesignIcon name="source-count" /> {selectedSources.length} sources</span>
+          <select aria-label="Capability" value={capability} disabled={locked}
+            onChange={event => setCapability(event.currentTarget.value as Capability)}>
+            <option value="LEARN">Learn</option><option value="RESEARCH">Research</option><option value="WRITE">Write</option>
+          </select>
+          <select aria-label="Output" name="task" key={capability} disabled={locked}
+            defaultValue={editing && plan?.objective.capability === capability ? plan.objective.task : 'answer'}>
+            {Object.entries(tasks[capability]).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <details className="composer-mobile-sources">
+            <summary>{text('Choose sources', 'Chọn nguồn')}</summary>
+            {documents.map(doc => <label className="check-option" key={doc.document_id}>
+              <input type="checkbox" checked={selectedSources.includes(doc.document_id)} disabled={locked}
+                onChange={event => {
+                  const checked = event.currentTarget.checked
+                  setSelectedSources(current => checked ? [...new Set([...current, doc.document_id])]
+                    : current.filter(id => id !== doc.document_id))
+                }} /> {doc.name}
+            </label>)}
+          </details>
+          {conversation && !editing && <button type="button" disabled={locked} className="ghost sm" onClick={newChat}>New chat</button>}
+          {editing && <button type="button" disabled={locked} className="secondary sm"
+            onClick={() => setEditing(false)}>Cancel editing</button>}
+          <button type="submit" disabled={locked} className="composer-send"
+            aria-label={editing ? 'Save new version' : mode === 'PLAN' ? 'Create plan' : 'Send'}>
+            <DesignIcon name="send" />
           </button>
-          {editing && (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={() => setEditing(false)}
-            >
-              Cancel edit
-            </button>
-          )}
         </div>
       </form>
-
-      {error && <p role="alert">{error}</p>}
-
-      {/* Plan Lifecycle */}
-      {plan && (
-        <article className="form-stack plan-card" aria-label={`Plan version ${plan.plan_version}`}>
-          <div className="plan-header">
-            <h4>Plan version {plan.plan_version}</h4>
-            <span className={`badge ${plan.state === 'ACCEPTED' ? 'badge-success' : plan.state === 'CANCELLED' ? 'badge-warning' : 'badge-info'}`}>
-              {plan.state === 'REVIEW' ? 'Under Review' : plan.state === 'ACCEPTED' ? 'Accepted' : 'Cancelled'}
-            </span>
-          </div>
-
-          <p><strong>Objective:</strong> {plan.objective.query}</p>
-
-          <p><strong>Steps:</strong></p>
-          <ol className="plan-steps">
-            {plan.steps.map((step, idx) => (
-              <li key={idx}><strong>{step.tool}:</strong> {step.action}</li>
-            ))}
-          </ol>
-
-          <p><strong>Expected outputs:</strong> {plan.expected_outputs.join(', ')}</p>
-
-          <p>Selected sources</p>
-          <ul>
-            {plan.objective.document_ids.map(id => (
-              <li key={id}>
-                {documents.find(doc => doc.document_id === id)?.name ?? 'Unavailable source'}
-              </li>
-            ))}
-          </ul>
-
-          {plan.state === 'CANCELLED' && <p>Plan cancelled.</p>}
-
-          {plan.state !== 'CANCELLED' && (
-            <div className="actions">
-              {plan.state === 'REVIEW' && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => review('accept', plan)}
-                >
-                  Accept
-                </button>
-              )}
-              {plan.state === 'ACCEPTED' && (
-                <button
-                  type="button"
-                  disabled={busy || activeId !== undefined}
-                  onClick={() => review('run', plan)}
-                >
-                  Run accepted plan
-                </button>
-              )}
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy}
-                onClick={() => {
-                  setCapability(plan.objective.capability)
-                  setSelectedSources(plan.objective.document_ids)
-                  setEditing(true)
-                }}
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy}
-                onClick={() => review('regenerate', plan)}
-              >
-                Regenerate
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy}
-                onClick={() => review('cancel', plan)}
-              >
-                Cancel plan
-              </button>
-            </div>
-          )}
-        </article>
-      )}
-
-      {/* History and Active Run */}
-      {history.map(answers)}
-      {run && answers(run)}
-
-      {/* Cancel run action during Agent or other active execution */}
-      {activeId && (
-        <button
-          type="button"
-          className="secondary"
-          disabled={busy}
-          onClick={() =>
-            void perform(async () => {
-              setRun(await api<Run>(base + '/runs/' + activeId + '/cancel', 'POST'))
-              setActiveId(undefined)
-            })
-          }
-        >
-          Cancel run
-        </button>
-      )}
     </section>
   )
 }

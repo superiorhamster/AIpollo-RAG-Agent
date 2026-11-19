@@ -7,7 +7,9 @@ export default async function WorkspacesPage() {
   const workspaces = await signedInRequest<Workspace[]>('/v1/workspaces', '/workspaces')
   return (
     <>
-      <AccountMenu />
+      <AccountMenu search={workspaces.map(workspace => ({
+        name: workspace.name, href: '/workspaces/' + workspace.workspace_id, kind: 'Workspace',
+      }))} />
       <main>
         <div style={{ marginBottom: '1.5rem' }}>
           <h1>Workspaces</h1>

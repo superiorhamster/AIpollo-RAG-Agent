@@ -139,3 +139,20 @@ test('owner shares a workspace with a viewer and editor, then revokes and delete
     await Promise.allSettled([viewerContext.close(), editorContext.close()])
   }
 })
+
+test('administrator can read the overview and filter user accounts', async ({ page }) => {
+  await page.goto('/sign-in')
+  await page.getByLabel('Email').fill('phase01-admin@example.com')
+  await page.getByLabel('Password', { exact: true }).fill('Phase1!a')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(page).toHaveURL(/\/workspaces$/)
+  await page.goto('/admin')
+  await expect(page.getByRole('heading', { name: 'Operations overview' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Service health' })).toBeVisible()
+  await page.getByRole('navigation', { name: 'Admin console navigation' })
+    .getByRole('button', { name: 'Users', exact: true }).click()
+  await page.getByRole('searchbox', { name: 'Search by email' }).fill('phase01-admin@example.com')
+  const user = page.getByRole('row', { name: /phase01-admin@example\.com/ })
+  await expect(user.getByRole('cell', { name: 'Current account' })).toBeVisible()
+  await expect(page.getByRole('complementary', { name: 'System configuration' })).toBeVisible()
+})

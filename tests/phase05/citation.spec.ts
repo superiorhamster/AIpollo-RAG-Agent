@@ -1,21 +1,39 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+class WorkspacePage {
+  constructor(private readonly page: Page) {}
+
+  get assistant() { return this.page.getByRole('region', { name: 'Workspace assistant' }) }
+  get sidebar() { return this.page.getByRole('complementary', { name: 'Workspace navigation' }) }
+  get modes() { return this.assistant.getByRole('group', { name: 'Mode' }) }
+
+  async open() {
+    const workspace = process.env.PHASE03_WORKSPACE_ID
+    expect(workspace).toBeTruthy()
+    await this.page.goto('/sign-in')
+    await this.page.getByLabel('Email').fill('phase03@example.com')
+    await this.page.getByLabel('Password', { exact: true }).fill('Phase3!a')
+    await this.page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await expect(this.page).toHaveURL(/\/workspaces$/)
+    await this.page.goto('/workspaces/' + workspace)
+  }
+
+  source() {
+    return this.sidebar.getByRole('checkbox', { name: 'study.pdf', exact: true })
+  }
+}
 
 test('an accepted plan returns a citation that opens its PDF page', async ({ page }) => {
-  const workspace = process.env.PHASE03_WORKSPACE_ID
-  expect(workspace).toBeTruthy()
-  await page.goto('/sign-in')
-  await page.getByLabel('Email').fill('phase03@example.com')
-  await page.getByLabel('Password', { exact: true }).fill('Phase3!a')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page).toHaveURL(/\/workspaces$/)
-  await page.goto('/workspaces/' + workspace)
-  const assistant = page.getByRole('region', { name: 'Workspace assistant' })
-  await assistant.getByLabel('Mode', { exact: true }).selectOption('PLAN')
+  const workspace = new WorkspacePage(page)
+  await workspace.open()
+  const assistant = workspace.assistant
+  await workspace.modes.getByRole('button', { name: 'Plan', exact: true }).click()
   await assistant.getByLabel('Question or objective').fill('What is the academic source?')
-  await assistant.getByRole('checkbox', { name: 'study.pdf', exact: true }).check()
+  await workspace.source().check()
   await assistant.getByRole('button', { name: 'Create plan' }).click()
   await expect(assistant.getByRole('heading', { name: 'Plan version 1' })).toBeVisible()
-  await assistant.getByRole('button', { name: 'Accept', exact: true }).click()
+  await expect(assistant.getByRole('button', { name: 'Run accepted plan' })).toHaveCount(0)
+  await assistant.getByRole('button', { name: 'Accept plan', exact: true }).click()
   await assistant.getByRole('button', { name: 'Run accepted plan' }).click()
   const citation = assistant.getByRole('button', { name: /study\.pdf, page \d+/ }).first()
   await expect(citation).toBeVisible({ timeout: 30000 })
@@ -26,15 +44,9 @@ test('an accepted plan returns a citation that opens its PDF page', async ({ pag
 })
 
 test('mobile viewport supports tab switching, preserves draft state across tabs, and switches to reader on citation click', async ({ page }) => {
-  const workspace = process.env.PHASE03_WORKSPACE_ID
-  expect(workspace).toBeTruthy()
   await page.setViewportSize({ width: 375, height: 667 })
-  await page.goto('/sign-in')
-  await page.getByLabel('Email').fill('phase03@example.com')
-  await page.getByLabel('Password', { exact: true }).fill('Phase3!a')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page).toHaveURL(/\/workspaces$/)
-  await page.goto('/workspaces/' + workspace)
+  const workspace = new WorkspacePage(page)
+  await workspace.open()
 
   // Verify tab switcher exists on mobile viewport
   const tablist = page.getByRole('tablist', { name: 'Workspace views' })
@@ -50,18 +62,19 @@ test('mobile viewport supports tab switching, preserves draft state across tabs,
   await assistantTab.click()
   await expect(assistantTab).toHaveAttribute('aria-selected', 'true')
 
-  const assistant = page.getByRole('region', { name: 'Workspace assistant' })
+  const assistant = workspace.assistant
   await expect(assistant).toBeVisible()
 
   // Enter draft input in form
   const draftQuery = 'Mobile draft preservation query'
   await assistant.getByLabel('Question or objective').fill(draftQuery)
+  await assistant.getByText('Choose sources', { exact: true }).click()
   await assistant.getByRole('checkbox', { name: 'study.pdf', exact: true }).check()
 
   // Switch to Sources tab
   await sourcesTab.click()
   await expect(sourcesTab).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByRole('heading', { name: 'Documents' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Library' })).toBeVisible()
 
   // Switch to Reader tab
   await readerTab.click()
@@ -75,10 +88,10 @@ test('mobile viewport supports tab switching, preserves draft state across tabs,
   await expect(assistant.getByRole('checkbox', { name: 'study.pdf', exact: true })).toBeChecked()
 
   // Create and run plan
-  await assistant.getByLabel('Mode', { exact: true }).selectOption('PLAN')
+  await workspace.modes.getByRole('button', { name: 'Plan', exact: true }).click()
   await assistant.getByRole('button', { name: 'Create plan' }).click()
   await expect(assistant.getByRole('heading', { name: /Plan version \d+/ })).toBeVisible()
-  await assistant.getByRole('button', { name: 'Accept', exact: true }).click()
+  await assistant.getByRole('button', { name: 'Accept plan', exact: true }).click()
   await assistant.getByRole('button', { name: 'Run accepted plan' }).click()
 
   const citation = assistant.getByRole('button', { name: /study\.pdf, page \d+/ }).first()
@@ -93,24 +106,18 @@ test('mobile viewport supports tab switching, preserves draft state across tabs,
 })
 
 test('keyboard accessibility, focus navigation, and accessible names', async ({ page }) => {
-  const workspace = process.env.PHASE03_WORKSPACE_ID
-  expect(workspace).toBeTruthy()
-  await page.goto('/sign-in')
-  await page.getByLabel('Email').fill('phase03@example.com')
-  await page.getByLabel('Password', { exact: true }).fill('Phase3!a')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page).toHaveURL(/\/workspaces$/)
-  await page.goto('/workspaces/' + workspace)
+  const workspace = new WorkspacePage(page)
+  await workspace.open()
 
-  const assistant = page.getByRole('region', { name: 'Workspace assistant' })
+  const assistant = workspace.assistant
   await expect(assistant).toBeVisible()
 
   // Verify accessible names on interactive form controls
-  const modeSelect = assistant.getByLabel('Mode', { exact: true })
+  const modeSelect = workspace.modes
   const capabilitySelect = assistant.getByLabel('Capability', { exact: true })
   const outputSelect = assistant.getByLabel('Output', { exact: true })
   const queryInput = assistant.getByLabel('Question or objective', { exact: true })
-  const studyPdfCheckbox = assistant.getByRole('checkbox', { name: 'study.pdf', exact: true })
+  const studyPdfCheckbox = workspace.source()
   const submitButton = assistant.getByRole('button', { name: 'Send' })
 
   await expect(modeSelect).toBeVisible()
@@ -134,21 +141,15 @@ test('keyboard accessibility, focus navigation, and accessible names', async ({ 
 })
 
 test('handles validation errors and plan cancellation lifecycle', async ({ page }) => {
-  const workspace = process.env.PHASE03_WORKSPACE_ID
-  expect(workspace).toBeTruthy()
-  await page.goto('/sign-in')
-  await page.getByLabel('Email').fill('phase03@example.com')
-  await page.getByLabel('Password', { exact: true }).fill('Phase3!a')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page).toHaveURL(/\/workspaces$/)
-  await page.goto('/workspaces/' + workspace)
+  const workspace = new WorkspacePage(page)
+  await workspace.open()
 
-  const assistant = page.getByRole('region', { name: 'Workspace assistant' })
+  const assistant = workspace.assistant
   await expect(assistant).toBeVisible()
 
   // Validation error state: question filled but no source checked
   await assistant.getByLabel('Question or objective').fill('Query without sources')
-  const studyPdf = assistant.getByRole('checkbox', { name: 'study.pdf', exact: true })
+  const studyPdf = workspace.source()
   if (await studyPdf.isChecked()) {
     await studyPdf.uncheck()
   }
@@ -158,10 +159,18 @@ test('handles validation errors and plan cancellation lifecycle', async ({ page 
   await expect(alert).toHaveText('Enter a question and choose between 1 and 100 sources.')
 
   // Create a plan to test cancellation
-  await assistant.getByLabel('Mode', { exact: true }).selectOption('PLAN')
-  await assistant.getByRole('checkbox', { name: 'study.pdf', exact: true }).check()
+  await workspace.modes.getByRole('button', { name: 'Plan', exact: true }).click()
+  await workspace.source().check()
   await assistant.getByRole('button', { name: 'Create plan' }).click()
   await expect(assistant.getByRole('heading', { name: /Plan version \d+/ })).toBeVisible()
+
+  await assistant.getByRole('button', { name: 'Accept plan', exact: true }).click()
+  await expect(assistant.getByRole('button', { name: 'Run accepted plan' })).toBeVisible()
+  await assistant.getByRole('button', { name: 'Edit plan', exact: true }).click()
+  await assistant.getByLabel('Question or objective').fill('Review a revised question with the selected source')
+  await assistant.getByRole('button', { name: 'Save new version', exact: true }).click()
+  await expect(assistant.getByRole('heading', { name: 'Plan version 2', exact: true })).toBeVisible()
+  await expect(assistant.getByRole('button', { name: 'Run accepted plan' })).toHaveCount(0)
 
   // Plan cancellation
   const cancelButton = assistant.getByRole('button', { name: 'Cancel plan' })
@@ -170,6 +179,41 @@ test('handles validation errors and plan cancellation lifecycle', async ({ page 
 
   // Verify cancelled plan state
   await expect(assistant.getByText('Plan cancelled.')).toBeVisible()
-  await expect(assistant.getByRole('button', { name: 'Accept' })).toHaveCount(0)
+  await expect(assistant.getByRole('button', { name: 'Accept plan' })).toHaveCount(0)
   await expect(assistant.getByRole('button', { name: 'Run accepted plan' })).toHaveCount(0)
+})
+
+test('evidence table is saved and opens the cited source', async ({ page }) => {
+  const workspace = new WorkspacePage(page)
+  await workspace.open()
+  const assistant = workspace.assistant
+  await workspace.source().check()
+  await assistant.getByRole('combobox', { name: 'Capability' }).selectOption('RESEARCH')
+  await assistant.getByRole('combobox', { name: 'Output' }).selectOption('evidence_table')
+  await assistant.getByLabel('Question or objective').fill('What is the academic source?')
+  await assistant.getByRole('button', { name: 'Send' }).click()
+  await assistant.getByText('Save as artifact', { exact: true }).click({ timeout: 30000 })
+  await assistant.getByRole('textbox', { name: 'Shared artifact name' }).fill('Cited evidence')
+  await assistant.getByRole('button', { name: 'Save artifact', exact: true }).click()
+  await expect(assistant.getByText('Artifact saved', { exact: true })).toBeVisible()
+  await workspace.sidebar.getByRole('button', { name: 'Artifacts', exact: true }).click()
+  await page.getByRole('button', { name: 'Cited evidence', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Evidence Table', exact: true })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: 'Method' })).toBeVisible()
+  const citation = page.getByRole('table').getByRole('button', { name: /study\.pdf, page \d+/ }).first()
+  const number = (await citation.textContent())?.match(/page (\d+)/)?.[1]
+  await citation.click()
+  await expect(page.getByRole('img', { name: 'PDF page ' + number, exact: true })).toBeVisible()
+})
+
+test('switches workspace navigation language and remembers the choice', async ({ page }) => {
+  const workspace = new WorkspacePage(page)
+  await workspace.open()
+  await page.getByRole('button', { name: 'Tiếng Việt', exact: true }).click()
+  await workspace.sidebar.getByRole('button', { name: 'Thư viện', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Thư viện', exact: true })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Tiếng Việt', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'English', exact: true }).click()
+  await expect(workspace.sidebar.getByRole('button', { name: 'Library', exact: true })).toBeVisible()
 })

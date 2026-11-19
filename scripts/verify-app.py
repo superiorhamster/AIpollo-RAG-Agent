@@ -32,7 +32,7 @@ def verify_service(service: str, base_url: str) -> None:
 
 def verify_homepage(base_url: str) -> None:
     with urlopen(base_url, timeout=5) as response:
-        if response.status != 200 or b"<h1>Super Agentic RAG</h1>" not in response.read():
+        if response.status != 200 or b"<h1>AIpollo</h1>" not in response.read():
             raise ValueError("the home page failed to render its heading")
 
 

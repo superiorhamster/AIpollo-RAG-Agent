@@ -8,3 +8,9 @@
 !tsconfig.json
 !scripts/
 !scripts/**
+
+!public/
+!public/aipollo/
+!public/aipollo/**
+!public/fonts/
+!public/fonts/**

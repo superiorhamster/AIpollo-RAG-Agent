@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useState, type FormEvent } from 'react'
+import { DesignIcon } from '../../components/aipollo'
 import { api, errorMessage } from '../../lib/api'
-import { PdfPreview, type Region } from './pdf-preview'
+import { PdfPreview, type CitationTarget, type Region } from './pdf-preview'
 
 type Annotation = {
   annotation_id: string
@@ -11,9 +12,10 @@ type Annotation = {
   region: Region | null
 }
 
-export function AnnotatedPreview({ documentUrl, page, onPage }: {
+export function AnnotatedPreview({ documentUrl, page, citation, onPage }: {
   documentUrl: string
   page: number
+  citation?: CitationTarget
   onPage: (page: number) => void
 }) {
   const [items, setItems] = useState<Annotation[]>([])
@@ -51,20 +53,31 @@ export function AnnotatedPreview({ documentUrl, page, onPage }: {
   }
 
   return <>
-    <PdfPreview url={documentUrl + '/preview'} page={page} onPage={onPage} regions={regions}
+    <PdfPreview url={documentUrl + '/preview'} page={page} onPage={onPage} regions={regions} citationRegion={citation?.region ?? undefined}
       onRegion={selecting ? (region, selectedPage) => {
         setDraft({ page: selectedPage, region })
         setSelecting(false)
       } : undefined} />
-    <section className="form-stack" aria-label="Personal annotations">
-      <h3>Page notes and highlights</h3>
-      <button type="button" className="secondary" aria-pressed={selecting} onClick={() => setSelecting(active => !active)}>
-        {selecting ? 'Cancel selection' : 'Select highlight'}
-      </button>
+    {citation?.text && <section className="reader-annotations form-stack" aria-label="Selected evidence">
+      <h3><DesignIcon name="annotate" /> Source evidence · p. {citation.page}</h3>
+      <p className="muted">{citation.text}</p>
+    </section>}
+    <section className="reader-annotations form-stack" aria-label="Personal annotations">
+      <header>
+        <h3><DesignIcon name="annotate" /> New annotation · p. {page}</h3>
+        {selection && <span className="badge badge-info">Linked to passage</span>}
+      </header>
       {selecting && <p role="status">Drag across a region on the PDF page.</p>}
       <form className="form-stack" onSubmit={add}>
-        <label>Personal note<textarea name="body" maxLength={3000} /></label>
-        <button>Save note or highlight</button>
+        <textarea id="annotation-body" aria-label="Personal note" name="body" maxLength={3000}
+          placeholder="Write a note linked to this page…" rows={2} />
+        <div className="actions">
+          <button className="sm">Save note or highlight</button>
+          <button type="button" className="secondary sm" aria-pressed={selecting} onClick={() => setSelecting(active => !active)}>
+            {selecting ? 'Cancel selection' : 'Select highlight'}
+          </button>
+          {selection && <button type="button" className="secondary sm" onClick={() => setDraft(undefined)}>Clear selection</button>}
+        </div>
       </form>
       {error && <p role="alert">{error}</p>}
       {!!current.length && <ul className="form-stack">

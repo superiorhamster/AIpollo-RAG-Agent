@@ -1,24 +1,35 @@
 'use client'
 
-import { useEffect, useRef, useState, type PointerEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react'
 import type { PDFDocumentProxy, PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist'
+import { RefreshCw, AlertCircle } from 'lucide-react'
+import { DesignIcon } from '../../components/aipollo'
 import { authenticatedFetch, readResponse } from '../../lib/api'
 
 export type Region = [number, number, number, number]
+export type CitationTarget = { document_id: string; page: number; region?: Region | null; text?: string }
 
-export function PdfPreview({ url, page, onPage, regions = [], onRegion }: {
+export function PdfPreview({ url, page, onPage, regions = [], citationRegion, onRegion }: {
   url: string
   page: number
   onPage: (page: number) => void
   regions?: Region[]
+  citationRegion?: Region
   onRegion?: (region: Region, page: number) => void
 }) {
   const [pdf, setPdf] = useState<PDFDocumentProxy>()
   const [loadError, setLoadError] = useState(false)
   const [renderError, setRenderError] = useState(false)
   const [attempt, setAttempt] = useState(0)
+  const [zoom, setZoom] = useState(100)
+  const [renderedPage, setRenderedPage] = useState<number>()
+  const [findOpen, setFindOpen] = useState(false)
+  const [finding, setFinding] = useState(false)
+  const [findResult, setFindResult] = useState('')
+  const lastMatch = useRef<{ query: string; page: number }>(undefined)
   const start = useRef<[number, number] | undefined>(undefined)
   const canvas = useRef<HTMLCanvasElement>(null)
+  const citationMark = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {
     let active = true
@@ -63,6 +74,7 @@ export function PdfPreview({ url, page, onPage, regions = [], onRegion }: {
       targetCanvas.height = Math.ceil(viewport.height)
       task = source.render({ canvas: targetCanvas, viewport })
       await task.promise
+      if (active) setRenderedPage(pageNumber)
     }
     void renderPage().catch(() => { if (active) setRenderError(true) })
     return () => {
@@ -71,6 +83,44 @@ export function PdfPreview({ url, page, onPage, regions = [], onRegion }: {
     }
   }, [pdf, pageNumber])
 
+  useEffect(() => {
+    const target = citationMark.current
+    if (target && pdf && renderedPage === pageNumber) {
+      const frame = requestAnimationFrame(() => target.scrollIntoView({ block: 'nearest', inline: 'nearest' }))
+      return () => cancelAnimationFrame(frame)
+    }
+  }, [citationRegion, pdf, pageNumber, renderedPage])
+
+  async function findText(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!pdf || finding) return
+    const query = String(new FormData(event.currentTarget).get('find')).trim().normalize().toLocaleLowerCase()
+    if (!query) return
+    setFinding(true)
+    setFindResult('')
+    const firstPage = lastMatch.current?.query === query && lastMatch.current.page === pageNumber
+      ? pageNumber % pdf.numPages + 1 : pageNumber
+    try {
+      for (let offset = 0; offset < pdf.numPages; offset++) {
+        const next = (firstPage - 1 + offset) % pdf.numPages + 1
+        const content = await (await pdf.getPage(next)).getTextContent()
+        const text = content.items.map(item => 'str' in item ? item.str : '').join(' ')
+          .normalize().toLocaleLowerCase().replace(/\s+/g, ' ')
+        if (text.includes(query.replace(/\s+/g, ' '))) {
+          lastMatch.current = { query, page: next }
+          onPage(next)
+          setFindResult('Match on page ' + next)
+          return
+        }
+      }
+      setFindResult('No matching text found in this PDF.')
+    } catch {
+      setFindResult('Could not search text in this PDF.')
+    } finally {
+      setFinding(false)
+    }
+  }
+
   function relative(event: PointerEvent<HTMLDivElement>): [number, number] {
     const box = event.currentTarget.getBoundingClientRect()
     const clamp = (value: number) => Math.max(0, Math.min(1, value))
@@ -78,49 +128,97 @@ export function PdfPreview({ url, page, onPage, regions = [], onRegion }: {
   }
 
   if (loadError || renderError) {
-    return <div role="alert" className="form-stack">
-      <p>Could not display this PDF.</p>
-      <button type="button" className="secondary" onClick={() => {
-        setPdf(undefined)
-        setLoadError(false)
-        setRenderError(false)
-        setAttempt(value => value + 1)
-      }}>Try preview again</button>
-    </div>
+    return (
+      <div role="alert" className="form-stack">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <AlertCircle size={16} aria-hidden="true" />
+          <p style={{ margin: 0 }}>Could not display this PDF.</p>
+        </div>
+        <button
+          type="button"
+          className="secondary sm"
+          onClick={() => {
+            setPdf(undefined)
+            setLoadError(false)
+            setRenderError(false)
+            setAttempt(value => value + 1)
+          }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+        >
+          <RefreshCw size={13} aria-hidden="true" />
+          <span>Try preview again</span>
+        </button>
+      </div>
+    )
   }
 
   return (
     <>
       {pdf ? (
         <div className="pdf-controls">
-          <button type="button" className="secondary" disabled={pageNumber === 1}
-            onClick={() => onPage(pageNumber - 1)}>Previous page</button>
+          <button type="button" aria-label="Previous page" disabled={pageNumber === 1}
+            onClick={() => onPage(pageNumber - 1)}><DesignIcon name="chevron-left" /></button>
           <span aria-live="polite">Page {pageNumber} of {pdf.numPages}</span>
-          <button type="button" className="secondary" disabled={pageNumber === pdf.numPages}
-            onClick={() => onPage(pageNumber + 1)}>Next page</button>
+          <button type="button" aria-label="Next page" disabled={pageNumber === pdf.numPages}
+            onClick={() => onPage(pageNumber + 1)}><DesignIcon name="chevron-right" /></button>
+          <div className="pdf-zoom">
+            <button type="button" aria-label="Zoom out" disabled={zoom <= 50}
+              onClick={() => setZoom(value => value - 25)}><DesignIcon name="minus" /></button>
+            <button type="button" aria-label="Reset zoom" onClick={() => setZoom(100)}>{zoom}%</button>
+            <button type="button" aria-label="Zoom in" disabled={zoom >= 200}
+              onClick={() => setZoom(value => value + 25)}><DesignIcon name="plus" /></button>
+            <button type="button" aria-label="Find in PDF" aria-expanded={findOpen}
+              onClick={() => setFindOpen(value => !value)}><DesignIcon name="search" /></button>
+          </div>
         </div>
-      ) : <p role="status">Loading preview…</p>}
-      <div className="pdf-stage" hidden={!pdf}>
+      ) : (
+        <p role="status">Loading preview…</p>
+      )}
+      {pdf && findOpen && <form className="reader-find" onSubmit={findText}>
+        <input type="search" name="find" aria-label="Text to find" placeholder="Find text in the PDF…" required disabled={finding} autoFocus />
+        <button type="submit" className="secondary sm" disabled={finding}>{finding ? 'Finding…' : 'Find next'}</button>
+        {findResult && <p role="status">{findResult}</p>}
+      </form>}
+      <div className="pdf-paper" hidden={!pdf}>
+        <div className="pdf-stage" style={{ width: zoom + '%' }}>
         <canvas ref={canvas} role="img" aria-label={'PDF page ' + pageNumber} />
-        {regions.map(([left, top, right, bottom], index) => <span key={index} className="pdf-highlight" style={{
-          left: left * 100 + '%', top: top * 100 + '%',
-          width: (right - left) * 100 + '%', height: (bottom - top) * 100 + '%',
-        }} />)}
-        {onRegion && <div className="pdf-selection"
-          onPointerDown={event => {
-            if (event.button !== 0) return
-            start.current = relative(event)
-            event.currentTarget.setPointerCapture(event.pointerId)
-          }}
-          onPointerCancel={() => { start.current = undefined }}
-          onPointerUp={event => {
-            if (!start.current) return
-            const [x, y] = relative(event)
-            const [sx, sy] = start.current
-            start.current = undefined
-            if (Math.abs(x - sx) < .01 || Math.abs(y - sy) < .01) return
-            onRegion([Math.min(x, sx), Math.min(y, sy), Math.max(x, sx), Math.max(y, sy)], pageNumber)
-          }} />}
+        {citationRegion && <span className="pdf-highlight citation-highlight" ref={citationMark} style={{
+          left: citationRegion[0] * 100 + '%', top: citationRegion[1] * 100 + '%',
+          width: (citationRegion[2] - citationRegion[0]) * 100 + '%',
+          height: (citationRegion[3] - citationRegion[1]) * 100 + '%',
+        }} />}
+        {regions.map(([left, top, right, bottom], index) => (
+          <span
+            key={index}
+            className="pdf-highlight"
+            style={{
+              left: left * 100 + '%',
+              top: top * 100 + '%',
+              width: (right - left) * 100 + '%',
+              height: (bottom - top) * 100 + '%',
+            }}
+          />
+        ))}
+        {onRegion && (
+          <div
+            className="pdf-selection"
+            onPointerDown={event => {
+              if (event.button !== 0) return
+              start.current = relative(event)
+              event.currentTarget.setPointerCapture(event.pointerId)
+            }}
+            onPointerCancel={() => { start.current = undefined }}
+            onPointerUp={event => {
+              if (!start.current) return
+              const [x, y] = relative(event)
+              const [sx, sy] = start.current
+              start.current = undefined
+              if (Math.abs(x - sx) < .01 || Math.abs(y - sy) < .01) return
+              onRegion([Math.min(x, sx), Math.min(y, sy), Math.max(x, sx), Math.max(y, sy)], pageNumber)
+            }}
+          />
+        )}
+        </div>
       </div>
     </>
   )

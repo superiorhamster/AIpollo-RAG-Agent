@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { ArrowLeft, User, Shield, ExternalLink } from 'lucide-react'
 import { AccountMenu } from '../components/account-menu'
 import { UserId } from '../components/user-id'
 import type { Account } from '../lib/api'
@@ -10,18 +11,24 @@ export default async function AccountPage() {
 
   return (
     <>
-      <AccountMenu />
+      <AccountMenu email={account.email} />
       <main className="account-shell">
-        <div style={{ marginBottom: '1rem' }}>
-          <Link href="/workspaces" prefetch={false} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-            <span aria-hidden="true">&larr;</span> Back to workspaces
+        <div style={{ marginBottom: '1.25rem' }}>
+          <Link
+            href="/workspaces"
+            prefetch={false}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', textDecoration: 'none' }}
+          >
+            <ArrowLeft size={16} aria-hidden="true" />
+            <span>Back to workspaces</span>
           </Link>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
           <h1>Account</h1>
           <span className={`badge ${isAdmin ? 'badge-primary' : 'badge-neutral'}`}>
-            {isAdmin ? 'Administrator' : 'Researcher'}
+            {isAdmin ? <Shield size={13} aria-hidden="true" /> : <User size={13} aria-hidden="true" />}
+            <span>{isAdmin ? 'Administrator' : 'Researcher'}</span>
           </span>
         </div>
 
@@ -29,7 +36,7 @@ export default async function AccountPage() {
           <div style={{ paddingBottom: '0.75rem', borderBottom: '1px solid var(--line)' }}>
             <p style={{ fontWeight: 600, fontSize: '1.05rem', color: 'var(--ink)' }}>{account.email}</p>
             <p className="muted" style={{ marginTop: '0.2rem' }}>
-              {isAdmin ? 'Platform administrator' : 'Platform user'}
+              {isAdmin ? 'Platform administrator' : 'Platform research user'}
             </p>
           </div>
 
@@ -40,9 +47,10 @@ export default async function AccountPage() {
               <Link
                 href="/admin"
                 className="button secondary"
-                style={{ display: 'inline-flex', width: 'fit-content', textDecoration: 'none' }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', width: 'fit-content', textDecoration: 'none' }}
               >
-                Administration
+                <Shield size={16} aria-hidden="true" />
+                <span>Administration</span>
               </Link>
             </div>
           )}

@@ -1,4 +1,3 @@
-import Link from 'next/link'
 import { AccountForm } from '../components/account-form'
 
 export default async function SignInPage({ searchParams }: {

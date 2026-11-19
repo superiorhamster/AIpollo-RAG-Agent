@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 test('uploads PDF and DOCX, navigates pages, downloads the original, and deletes the workspace', async ({ page }) => {
+  test.slow()
   const email = `documents-web-${Date.now()}@example.com`
   await page.goto('/register')
   await page.getByLabel('Email').fill(email)
@@ -25,10 +26,22 @@ test('uploads PDF and DOCX, navigates pages, downloads the original, and deletes
   await expect(page).toHaveURL(/page=2/)
   await page.reload()
   await expect(page.getByText('Page 2 of 2')).toBeVisible({ timeout: 12000 })
+  await page.getByRole('button', { name: 'Find in PDF', exact: true }).click()
+  await page.getByRole('searchbox', { name: 'Text to find' }).fill('Academic source reference')
+  await page.getByRole('button', { name: 'Find next', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Match on page 2' })).toBeVisible()
+  await page.getByRole('button', { name: 'Find in PDF', exact: true }).click()
 
+  await page.getByRole('complementary', { name: 'Workspace navigation' })
+    .getByRole('button', { name: 'Library', exact: true }).click()
   await page.getByLabel('Document file').setInputFiles('/fixtures/paper.docx')
   await page.getByRole('button', { name: 'Upload document' }).click()
   await expect(page.getByRole('heading', { name: 'paper.docx' })).toBeVisible()
+  const search = page.getByRole('searchbox', { name: 'Search workspaces and sources' })
+  await search.fill('paper.docx')
+  await page.getByRole('link', { name: 'paper.docx Source', exact: true }).click()
+  await expect(search).toHaveValue('')
+  await page.getByRole('heading', { name: 'paper.docx', exact: true }).click()
   const download = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Download original' }).click()
   expect((await download).suggestedFilename()).toBe('paper.docx')

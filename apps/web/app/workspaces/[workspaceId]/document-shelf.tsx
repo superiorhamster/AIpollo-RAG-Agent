@@ -1,13 +1,18 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
+import { AccountMenu } from '../../components/account-menu'
+import { DesignIcon, type IconName } from '../../components/aipollo'
+import { useWorkspaceLanguage } from '../../components/workspace-language'
 import { api, ApiError, authenticatedFetch, errorMessage, readResponse, type Workspace } from '../../lib/api'
 import { workspaceLocation } from '../../lib/workspace-location'
 import { AnnotatedPreview } from './annotated-preview'
 import { SourceSearch } from './source-search'
 import { AcademicLibrary } from './academic-library'
 import { InteractionPanel } from './interaction-panel'
+import type { CitationTarget } from './pdf-preview'
 
 export type DocumentItem = {
   document_id: string
@@ -20,25 +25,58 @@ export type DocumentItem = {
   created_at: string
 }
 
-type Job = { kind: 'preview' | 'index'; status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' }
+type Job = { kind: 'preview' | 'index'; status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'; error_code?: string | null }
+type DocumentJobs = { preview?: Job['status']; index?: Job['status']; error?: string }
+type View = 'chats' | 'library' | 'notes' | 'artifacts' | 'references' | 'history'
 
-export function DocumentShelf({ workspace, items, selected, initialPage }: {
+const views: { id: View; label: string; vietnamese: string; icon: IconName; activeIcon?: IconName }[] = [
+  { id: 'chats', label: 'Chats', vietnamese: 'Trò chuyện', icon: 'chats', activeIcon: 'chats-active' },
+  { id: 'library', label: 'Library', vietnamese: 'Thư viện', icon: 'library', activeIcon: 'library-active' },
+  { id: 'notes', label: 'Notes', vietnamese: 'Ghi chú', icon: 'notes' },
+  { id: 'artifacts', label: 'Artifacts', vietnamese: 'Sản phẩm', icon: 'artifacts', activeIcon: 'artifacts-active' },
+  { id: 'references', label: 'References', vietnamese: 'Tài liệu tham khảo', icon: 'references' },
+  { id: 'history', label: 'History', vietnamese: 'Lịch sử', icon: 'history' },
+]
+const filters = {
+  all: 'All', succeeded: 'Ready', running: 'Processing', queued: 'Queued', failed: 'Failed', cancelled: 'Cancelled',
+} as const
+const vietnameseFilters: Record<keyof typeof filters, string> = {
+  all: 'Tất cả', succeeded: 'Sẵn sàng', running: 'Đang xử lý', queued: 'Đang chờ', failed: 'Lỗi', cancelled: 'Đã hủy',
+}
+const jobColors: Record<Job['status'], string> = {
+  succeeded: 'success', running: 'warning', queued: 'info', failed: 'danger', cancelled: 'neutral',
+}
+
+export function DocumentShelf({ workspace, workspaces, email, items, selected, initialPage }: {
   workspace: Workspace
+  workspaces: Workspace[]
+  email: string
   items: DocumentItem[]
   selected?: string
   initialPage: number
 }) {
   const router = useRouter()
+  const { language, text } = useWorkspaceLanguage()
   const [documents, setDocuments] = useState(items)
   const [selectedId, setSelectedId] = useState<string | undefined>(selected ?? items[0]?.document_id)
   const [page, setPage] = useState(selected ? initialPage : 1)
+  const [view, setView] = useState<View>(items.length ? 'chats' : 'library')
   const [activeTab, setActiveTab] = useState<'assistant' | 'sources' | 'reader'>(
-    selected ? 'reader' : (items.length ? 'assistant' : 'sources')
+    selected ? 'reader' : items.length ? 'assistant' : 'sources'
   )
-  const [documentJobs, setDocumentJobs] = useState<Record<string, { preview?: Job['status']; index?: Job['status'] }>>({})
+  const [selectedSources, setSelectedSources] = useState<string[]>([])
+  const [sourcesLocked, setSourcesLocked] = useState(false)
+  const [readerVisible, setReaderVisible] = useState(true)
+  const [citation, setCitation] = useState<CitationTarget>()
+  const [filter, setFilter] = useState<keyof typeof filters>('all')
+  const [documentJobs, setDocumentJobs] = useState<Record<string, DocumentJobs>>({})
+  const latestJobs = useRef(documentJobs)
   const [busy, setBusy] = useState(false)
+  const [fileName, setFileName] = useState('')
   const [error, setError] = useState('')
   const uploadKey = useRef<string | null>(null)
+  const uploadForm = useRef<HTMLFormElement>(null)
+  const reader = useRef<HTMLElement>(null)
   const mayWrite = workspace.role !== 'VIEWER'
   const selectedDoc = documents.find(item => item.document_id === selectedId)
   const base = `/v1/workspaces/${workspace.workspace_id}/documents`
@@ -52,7 +90,7 @@ export function DocumentShelf({ workspace, items, selected, initialPage }: {
     async function pollJobs() {
       const pendingDocs = documents.filter(doc => {
         if (!doc.preview_ready) return true
-        const jobs = documentJobs[doc.document_id]
+        const jobs = latestJobs.current[doc.document_id]
         if (!jobs) return true
         return jobs.index === 'queued' || jobs.index === 'running'
       })
@@ -68,8 +106,10 @@ export function DocumentShelf({ workspace, items, selected, initialPage }: {
                 api<Job[]>(`${base}/${doc.document_id}/jobs`),
               ])
               const previewStatus = jobs.find(j => j.kind === 'preview')?.status ?? (updatedDoc.preview_ready ? 'succeeded' : 'queued')
-              const indexStatus = jobs.find(j => j.kind === 'index')?.status ?? 'queued'
-              return { id: doc.document_id, doc: updatedDoc, preview: previewStatus, index: indexStatus }
+              const indexJob = jobs.find(j => j.kind === 'index')
+              const failure = jobs.find(job => job.status === 'failed')
+              return { id: doc.document_id, doc: updatedDoc, preview: previewStatus,
+                index: indexJob?.status ?? 'queued', error: failure?.error_code ?? undefined }
             } catch (err) {
               if (err instanceof ApiError && err.status === 401) {
                 router.replace('/sign-in')
@@ -83,11 +123,11 @@ export function DocumentShelf({ workspace, items, selected, initialPage }: {
 
         let docsChanged = false
         const nextDocs = [...documents]
-        const nextJobs = { ...documentJobs }
+        const nextJobs = { ...latestJobs.current }
 
         for (const item of updates) {
           if (!item) continue
-          nextJobs[item.id] = { preview: item.preview, index: item.index }
+          nextJobs[item.id] = { preview: item.preview, index: item.index, error: item.error }
           if (item.doc.preview_ready) {
             const idx = nextDocs.findIndex(d => d.document_id === item.id)
             if (idx !== -1 && !nextDocs[idx].preview_ready) {
@@ -100,6 +140,7 @@ export function DocumentShelf({ workspace, items, selected, initialPage }: {
         if (docsChanged) {
           setDocuments(nextDocs)
         }
+        latestJobs.current = nextJobs
         setDocumentJobs(nextJobs)
 
         const stillPending = nextDocs.some(doc => {
@@ -121,13 +162,15 @@ export function DocumentShelf({ workspace, items, selected, initialPage }: {
       active = false
       clearTimeout(timer)
     }
-  }, [base, documents, documentJobs, router])
+  }, [base, documents, router])
 
   function select(id: string | undefined, nextPage = 1, switchMobileToReader = true) {
     setSelectedId(id)
     setPage(nextPage)
+    setCitation(undefined)
     window.history.replaceState(null, '', workspaceLocation(workspace.workspace_id, id, nextPage))
     if (switchMobileToReader) {
+      setReaderVisible(true)
       setActiveTab('reader')
     }
   }
@@ -147,9 +190,16 @@ export function DocumentShelf({ workspace, items, selected, initialPage }: {
 
   function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const form = event.currentTarget
-    const file = new FormData(form).get('file')
-    if (!(file instanceof File) || !file.size) return
+    const file = new FormData(event.currentTarget).get('file')
+    if (file instanceof File) uploadFile(file)
+  }
+
+  function uploadFile(file: File) {
+    if (!file.size || busy) return
+    if (!/\.(pdf|docx)$/i.test(file.name)) {
+      setError('Choose a PDF or DOCX document.')
+      return
+    }
     if (file.size > 25 * 1024 * 1024) {
       setError('Files may be up to 25 MiB.')
       return
@@ -159,14 +209,18 @@ export function DocumentShelf({ workspace, items, selected, initialPage }: {
     void run(async () => {
       const response = await authenticatedFetch(base, {
         method: 'POST', body: file,
-        headers: { 'Content-Type': 'application/octet-stream', 'Idempotency-Key': key,
-          'X-Filename': encodeURIComponent(file.name) },
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Idempotency-Key': key,
+          'X-Filename': encodeURIComponent(file.name),
+        },
       })
       const document = await readResponse<DocumentItem>(response)
       setDocuments(current => [document, ...current.filter(item => item.document_id !== document.document_id)])
       select(document.document_id, 1, true)
       uploadKey.current = null
-      form.reset()
+      uploadForm.current?.reset()
+      setFileName('')
     })
   }
 
@@ -185,7 +239,8 @@ export function DocumentShelf({ workspace, items, selected, initialPage }: {
       await api(base + '/' + document.document_id, 'DELETE')
       const remaining = documents.filter(item => item.document_id !== document.document_id)
       setDocuments(remaining)
-      select(remaining[0]?.document_id, 1, false)
+      setSelectedSources(current => current.filter(id => id !== document.document_id))
+      if (selectedId === document.document_id) select(remaining[0]?.document_id, 1, false)
     })
   }
 
@@ -198,370 +253,233 @@ export function DocumentShelf({ workspace, items, selected, initialPage }: {
     })
   }
 
-  const selectedPreviewJob = selectedDoc ? documentJobs[selectedDoc.document_id]?.preview : undefined
+  function navigate(next: View) {
+    setView(next)
+    setActiveTab(next === 'chats' || next === 'history' ? 'assistant' : 'sources')
+  }
+
+  function openUpload() {
+    navigate('library')
+    uploadForm.current?.querySelector<HTMLInputElement>('input')?.click()
+  }
+
+  function updateSource(id: string, checked: boolean) {
+    setSelectedSources(current => checked
+      ? [...new Set([...current, id])]
+      : current.filter(item => item !== id))
+  }
+
+  const sourceState = (doc: DocumentItem): Job['status'] => {
+    const jobs = documentJobs[doc.document_id]
+    if (jobs?.preview === 'failed') return 'failed'
+    return jobs?.index ?? jobs?.preview ?? 'queued'
+  }
+  const selectedPreviewJob = selectedDoc && documentJobs[selectedDoc.document_id]?.preview
+  function openCitation(target: CitationTarget) {
+    select(target.document_id, target.page, true)
+    setCitation(target)
+    requestAnimationFrame(() => reader.current?.focus({ preventScroll: true }))
+  }
 
   return (
     <>
-      <style>{`
-        .workspace-layout-root {
-          display: grid;
-          gap: 1.25rem;
-        }
-        .workspace-tab-nav {
-          display: none;
-        }
-        .workspace-tab-btn {
-          flex: 1;
-          padding: 0.6rem 0.85rem;
-          font-size: 0.92rem;
-          font-weight: 600;
-          text-align: center;
-          border: 1px solid var(--line);
-          background: var(--surface);
-          color: var(--ink);
-          border-radius: 0.45rem;
-          cursor: pointer;
-        }
-        .workspace-tab-btn.active, .workspace-tab-btn[aria-selected="true"] {
-          background: var(--accent);
-          color: #fff;
-          border-color: var(--accent);
-        }
-        .workspace-layout {
-          display: grid;
-          grid-template-columns: minmax(360px, 1.2fr) minmax(380px, 1.4fr);
-          gap: 1.5rem;
-          align-items: start;
-        }
-        .workspace-main-area {
-          display: grid;
-          gap: 1.5rem;
-        }
-        .workspace-reader-panel {
-          display: grid;
-          gap: 1rem;
-        }
-        .document-list {
-          list-style: none;
-          padding: 0;
-          margin: 0;
-          display: grid;
-          gap: 0.5rem;
-        }
-        .document-list-item {
-          display: flex;
-          flex-direction: column;
-          gap: 0.35rem;
-          padding: 0.5rem 0.65rem;
-          border: 1px solid var(--line);
-          border-radius: 0.45rem;
-          background: var(--surface);
-        }
-        .document-list-item.selected {
-          border-color: var(--accent);
-          background: #f8faff;
-        }
-        .document-select-btn {
-          text-align: left;
-          width: 100%;
-          overflow-wrap: anywhere;
-        }
-        .document-badges {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          gap: 0.35rem;
-        }
-        .badge {
-          display: inline-flex;
-          align-items: center;
-          font-size: 0.75rem;
-          font-weight: 600;
-          padding: 0.15rem 0.5rem;
-          border-radius: 9999px;
-          line-height: 1.25;
-          border: 1px solid var(--line);
-          background: var(--surface);
-          color: var(--ink);
-          white-space: nowrap;
-        }
-        .badge-success {
-          background: #e6f4ea;
-          color: #137333;
-          border-color: #ceead6;
-        }
-        .badge-info {
-          background: #e8f0fe;
-          color: #1a73e8;
-          border-color: #d2e3fc;
-        }
-        .badge-warning {
-          background: #fef7e0;
-          color: #b06000;
-          border-color: #fce8b2;
-        }
-        .badge-muted {
-          background: #f1f3f4;
-          color: #5f6368;
-          border-color: #dadce0;
-        }
-        @media (max-width: 64rem) {
-          .workspace-tab-nav {
-            display: flex;
-            gap: 0.5rem;
-            margin-bottom: 0.5rem;
-          }
-          .workspace-layout {
-            grid-template-columns: minmax(0, 1fr);
-          }
-          .workspace-panel[data-mobile-active="false"] {
-            display: none !important;
-          }
-          .workspace-panel[data-mobile-active="true"] {
-            display: grid !important;
-          }
-          .workspace-reader-panel[data-mobile-active="false"] {
-            display: none !important;
-          }
-          .workspace-reader-panel[data-mobile-active="true"] {
-            display: grid !important;
-          }
-        }
-        @media (min-width: 64.01rem) {
-          .workspace-panel {
-            display: grid !important;
-          }
-          .workspace-reader-panel {
-            display: grid !important;
-          }
-        }
-      `}</style>
-
-      <div className="workspace-layout-root">
-        {/* Mobile/Narrow Screen Accessible Tab Switcher */}
+      <AccountMenu compact workspace email={email} search={[
+        ...workspaces.map(item => ({
+          name: item.name, href: workspaceLocation(item.workspace_id), kind: 'Workspace' as const,
+        })),
+        ...documents.map(item => ({
+          name: item.name, href: workspaceLocation(workspace.workspace_id, item.document_id, 1),
+          kind: 'Source' as const, documentId: item.document_id,
+        })),
+      ]} onSelectSource={id => select(id)} />
+      <main className="app-workspace aipollo-workspace" lang={language}>
         <nav className="workspace-tab-nav" aria-label="Workspace views" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            id="tab-assistant"
-            aria-controls="panel-assistant"
-            aria-selected={activeTab === 'assistant'}
-            className={`workspace-tab-btn ${activeTab === 'assistant' ? 'active' : ''}`}
-            onClick={() => setActiveTab('assistant')}
-          >
-            Assistant
-          </button>
-          <button
-            type="button"
-            role="tab"
-            id="tab-sources"
-            aria-controls="panel-sources"
-            aria-selected={activeTab === 'sources'}
-            className={`workspace-tab-btn ${activeTab === 'sources' ? 'active' : ''}`}
-            onClick={() => setActiveTab('sources')}
-          >
-            Sources
-          </button>
-          <button
-            type="button"
-            role="tab"
-            id="tab-reader"
-            aria-controls="panel-reader"
-            aria-selected={activeTab === 'reader'}
-            className={`workspace-tab-btn ${activeTab === 'reader' ? 'active' : ''}`}
-            onClick={() => setActiveTab('reader')}
-          >
-            Reader
-          </button>
+          {([
+            ['assistant', text('Assistant', 'Trợ lý'), 'chats'],
+            ['sources', text('Sources', 'Nguồn'), 'library'],
+            ['reader', text('Reader', 'Trình đọc'), 'panel'],
+          ] as const).map(([id, label, icon]) => (
+            <button key={id} type="button" role="tab" id={'tab-' + id}
+              aria-controls={id === 'reader' ? 'panel-reader' : 'panel-main'} aria-selected={activeTab === id}
+              className="workspace-tab-btn" onClick={() => {
+                if (id === 'assistant') navigate('chats')
+                else if (id === 'sources') navigate('library')
+                else { setActiveTab('reader'); setReaderVisible(true) }
+              }}>
+              <DesignIcon name={icon} /> {label}
+            </button>
+          ))}
         </nav>
 
-        <div className="document-layout workspace-layout">
-          {/* Main workspace area: Assistant and Sources */}
-          <div className="workspace-main-area">
-            {/* Assistant Panel */}
-            <div
-              id="panel-assistant"
-              role="tabpanel"
-              aria-labelledby="tab-assistant"
-              className="workspace-panel"
-              data-mobile-active={activeTab === 'assistant'}
-            >
-              <InteractionPanel
-                workspaceId={workspace.workspace_id}
-                documents={documents}
-                canPublish={mayWrite}
-                onCitation={(docId, targetPage) => select(docId, targetPage, true)}
-              />
+        <div className="workspace-body" data-reader-visible={readerVisible}>
+          <aside className="workspace-sidebar" aria-label="Workspace navigation">
+            {mayWrite && <button className="workspace-upload" type="button" onClick={openUpload}>
+              <DesignIcon name="upload" /> {text('Upload source', 'Tải tài liệu lên')}
+            </button>}
+            <nav className="workspace-nav" aria-label="Workspace sections">
+              {views.map(item => (
+                <button className="workspace-nav-item" key={item.id} type="button"
+                  aria-current={view === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}>
+                  <DesignIcon name={view === item.id ? item.activeIcon ?? item.icon : item.icon} /> {text(item.label, item.vietnamese)}
+                </button>
+              ))}
+            </nav>
+            <Link href="/workspaces" className="workspace-nav-caption" aria-label="Back to workspaces">{text('Workspaces', 'Không gian làm việc')}</Link>
+            <ul className="workspace-links">
+              {workspaces.map(item => {
+                const current = item.workspace_id === workspace.workspace_id
+                return <li key={item.workspace_id}><Link
+                  href={workspaceLocation(item.workspace_id, undefined, 1)} aria-current={current ? 'page' : undefined}>
+                  <DesignIcon name={current ? 'folder-active' : 'folder'} /> <span>{item.name}</span>
+                </Link></li>
+              })}
+            </ul>
+            <fieldset className="workspace-sources" disabled={sourcesLocked}>
+              <legend className="workspace-nav-caption">{text('Sources', 'Nguồn')} · {text(`${selectedSources.length} of ${documents.length} active`, `đã chọn ${selectedSources.length}/${documents.length}`)}</legend>
+              {documents.map(doc => {
+                const checked = selectedSources.includes(doc.document_id)
+                const state = sourceState(doc)
+                return <label className="workspace-source" key={doc.document_id} data-checked={checked}>
+                  <input type="checkbox" aria-label={doc.name} checked={checked}
+                    onChange={event => updateSource(doc.document_id, event.currentTarget.checked)} />
+                  <DesignIcon name="file" /><span className="source-name" title={doc.name}>{doc.name}</span>
+                  {state !== 'succeeded' && <span className={'badge badge-' + jobColors[state]}>{text(filters[state], vietnameseFilters[state])}</span>}
+                </label>
+              })}
+            </fieldset>
+          </aside>
+
+          <div id="panel-main" className="workspace-center" data-mobile-active={activeTab !== 'reader'}>
+            <nav className="workspace-compact-nav" aria-label="Workspace sections">
+              {views.map(item => <button className="workspace-nav-item" key={item.id} type="button"
+                aria-current={view === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}>
+                <DesignIcon name={item.icon} /> {text(item.label, item.vietnamese)}
+              </button>)}
+              <Link href="/workspaces" aria-label="Back to workspaces">{text('Workspaces', 'Không gian làm việc')}</Link>
+            </nav>
+            {!readerVisible && <button type="button" className="secondary sm reader-open"
+              onClick={() => setReaderVisible(true)}><DesignIcon name="panel" /> Show reader</button>}
+            <div className="workspace-chat" hidden={view !== 'chats' && view !== 'history'}>
+              <InteractionPanel workspaceId={workspace.workspace_id} workspaceName={workspace.name}
+                documents={documents} selectedSources={selectedSources} setSelectedSources={setSelectedSources}
+                onSourcesLock={setSourcesLocked} showHistory={view === 'history'}
+                canPublish={mayWrite} onCitation={openCitation} />
             </div>
 
-            {/* Sources & Academic Library Panel */}
-            <div
-              id="panel-sources"
-              role="tabpanel"
-              aria-labelledby="tab-sources"
-              className="workspace-panel"
-              data-mobile-active={activeTab === 'sources'}
-            >
-              <section className="panel form-stack" aria-labelledby="documents-heading">
-                <h2 id="documents-heading">Documents</h2>
-                {mayWrite && (
-                  <form className="form-stack" method="post" onSubmit={upload}>
-                    <label>Document file
-                      <input
-                        type="file"
-                        name="file"
-                        accept=".pdf,.docx"
-                        required
-                        disabled={busy}
-                        onChange={() => { uploadKey.current = null }}
-                      />
-                    </label>
-                    <button type="submit" disabled={busy}>Upload document</button>
-                  </form>
-                )}
-                {error && <p role="alert">{error}</p>}
-                {!documents.length && <p className="muted">There are no documents in this workspace.</p>}
-                <ul className="document-list">
-                  {documents.map(document => {
-                    const isSelected = document.document_id === selectedId
-                    const jobs = documentJobs[document.document_id]
-                    return (
-                      <li
-                        key={document.document_id}
-                        className={`document-list-item ${isSelected ? 'selected' : ''}`}
-                      >
-                        <button
-                          type="button"
-                          className="secondary document-select-btn"
-                          aria-pressed={isSelected}
-                          onClick={() => select(document.document_id, 1, true)}
-                        >
-                          {document.name}
-                        </button>
-                        <div className="document-badges">
-                          {document.preview_ready ? (
-                            <span className="badge badge-success">Preview ready</span>
-                          ) : (
-                            <span className="badge badge-muted">
-                              {jobs?.preview === 'running'
-                                ? 'Generating preview…'
-                                : jobs?.preview === 'failed'
-                                ? 'Preview failed'
-                                : 'Preview queued'}
-                            </span>
-                          )}
-                          {jobs?.index === 'succeeded' ? (
-                            <span className="badge badge-success">Indexed</span>
-                          ) : jobs?.index === 'running' ? (
-                            <span className="badge badge-info">Indexing…</span>
-                          ) : jobs?.index === 'failed' ? (
-                            <span className="badge badge-warning">Index failed</span>
-                          ) : (
-                            <span className="badge badge-muted">Index queued</span>
-                          )}
-                        </div>
-                      </li>
-                    )
-                  })}
-                </ul>
-                {!!documents.length && (
-                  <SourceSearch
-                    workspaceId={workspace.workspace_id}
-                    documents={documents}
-                    onCitation={(docId, targetPage) => select(docId, targetPage, true)}
-                  />
-                )}
-                <AcademicLibrary
-                  workspace={workspace}
-                  onCitation={(docId, targetPage) => select(docId, targetPage, true)}
-                />
-              </section>
+            <section className="aipollo-library form-stack" hidden={view !== 'library'} aria-labelledby="documents-heading">
+              <header className="aipollo-section-heading">
+                <div><h1 id="documents-heading">{text('Library', 'Thư viện')}</h1>
+                  <p>{workspace.name} · {documents.length} {text('sources', 'nguồn')}</p></div>
+                {mayWrite && <button type="button" onClick={openUpload}>{text('Upload source', 'Tải tài liệu lên')}</button>}
+              </header>
+              {mayWrite && <form className="upload-drop" method="post" onSubmit={upload} ref={uploadForm}
+                onDragOver={event => event.preventDefault()} onDrop={event => {
+                  event.preventDefault()
+                  const file = event.dataTransfer.files[0]
+                  if (file) { uploadKey.current = null; uploadFile(file) }
+                }}>
+                <label htmlFor="workspace-upload-file"><DesignIcon name="upload-drop" /> {text('Drop PDF or DOCX here', 'Thả tệp PDF hoặc DOCX vào đây')}</label>
+                <p className="muted">{text('Maximum file size 25 MiB', 'Dung lượng tối đa 25 MiB')}</p>
+                <input id="workspace-upload-file" aria-label="Document file" type="file" name="file"
+                  accept=".pdf,.docx" required disabled={busy} onChange={event => {
+                    uploadKey.current = null
+                    setFileName(event.currentTarget.files?.[0]?.name ?? '')
+                  }} />
+                {fileName && <div className="upload-selection">
+                  <span className="muted">{fileName}</span>
+                  <button type="submit" className="sm" disabled={busy}>{text('Upload document', 'Tải lên')}</button>
+                </div>}
+              </form>}
+              {error && view === 'library' && <p role="alert"><DesignIcon name="error" /> {error}</p>}
+              <div className="library-filters" aria-label="Filter source status">
+                {Object.entries(filters).map(([value, label]) => {
+                  const count = value === 'all' ? documents.length : documents.filter(doc => sourceState(doc) === value).length
+                  if (value === 'cancelled' && !count) return null
+                  return <button key={value} type="button" aria-pressed={filter === value}
+                    onClick={() => setFilter(value as keyof typeof filters)}>{text(label, vietnameseFilters[value as keyof typeof filters])} {count}</button>
+                })}
+              </div>
+              <div className="aipollo-table-scroll">
+                <table className="aipollo-table">
+                  <thead><tr><th scope="col">{text('Name', 'Tên')}</th><th scope="col">{text('Type', 'Loại')}</th><th scope="col">{text('State', 'Trạng thái')}</th><th scope="col">{text('Action', 'Thao tác')}</th></tr></thead>
+                  <tbody>{documents.filter(doc => filter === 'all' || sourceState(doc) === filter).map(doc => {
+                    const state = sourceState(doc)
+                    return <tr key={doc.document_id}>
+                      <th scope="row"><span className="aipollo-table-file"><DesignIcon name="file" /> {doc.name}</span></th>
+                      <td>{doc.filename.toLowerCase().endsWith('.docx') ? 'DOCX' : 'PDF'}</td>
+                      <td><span className={'badge badge-' + jobColors[state]}>{text(filters[state], vietnameseFilters[state])}</span>
+                        {documentJobs[doc.document_id]?.error && <div className="muted">
+                          {documentJobs[doc.document_id].error?.replaceAll('_', ' ')}
+                        </div>}</td>
+                      <td>{doc.preview_ready && <button type="button" className="secondary sm" aria-label={'Open ' + doc.name}
+                        onClick={() => select(doc.document_id)}>{text('Open', 'Mở')}</button>}</td>
+                    </tr>
+                  })}</tbody>
+                </table>
+              </div>
+              {!documents.length && <p className="muted">There are no documents in this workspace.</p>}
+              {documents.length > 0 && filter !== 'all' && !documents.some(doc => sourceState(doc) === filter) &&
+                <p className="muted">No sources with this status.</p>}
+              {!!documents.length && <details className="library-source-search">
+                <summary><DesignIcon name="search" /> {text('Search sources', 'Tìm trong các nguồn')}</summary>
+                <SourceSearch workspaceId={workspace.workspace_id} documents={documents} onCitation={openCitation} />
+              </details>}
+            </section>
+
+            <div className="library-academic" hidden={view !== 'artifacts' && view !== 'references'}>
+              <AcademicLibrary workspace={workspace} view={view === 'references' || view === 'artifacts' ? view : undefined} onCitation={openCitation} />
             </div>
+            {view === 'notes' && <section className="form-stack">
+              <header className="aipollo-section-heading"><div><h1>{text('Notes', 'Ghi chú')}</h1><p>{workspace.name}</p></div></header>
+              <p className="muted">{selectedDoc ? 'View and edit personal page notes in the document reader.' : 'Add a source to write a page note.'}</p>
+              {selectedDoc && <button type="button" className="secondary sm"
+                onClick={() => { setReaderVisible(true); setActiveTab('reader'); requestAnimationFrame(() => {
+                  document.getElementById('annotation-body')?.focus()
+                }) }}>Open page notes</button>}
+            </section>}
           </div>
 
-          {/* Right-side Reader Panel: Document preview, page navigation, personal annotations */}
-          <div
-            id="panel-reader"
-            role="tabpanel"
-            aria-labelledby="tab-reader"
-            className="workspace-panel workspace-reader-wrapper"
-            data-mobile-active={activeTab === 'reader'}
-          >
-            <aside
-              role="region"
-              aria-label="Document preview"
-              className="panel form-stack document-preview workspace-reader-panel"
-            >
-              {selectedDoc ? (
-                <>
-                  <h2>{selectedDoc.name}</h2>
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={busy}
-                      onClick={() => download(selectedDoc.document_id)}
-                    >
-                      Download original
-                    </button>
-                    {mayWrite && (
-                      <button
-                        type="button"
-                        className="danger"
-                        disabled={busy}
-                        onClick={() => remove(selectedDoc)}
-                      >
-                        Delete document
-                      </button>
-                    )}
-                  </div>
-                  {mayWrite && (
-                    <form
-                      className="inline-form"
-                      method="post"
-                      key={selectedDoc.document_id}
-                      onSubmit={event => rename(event, selectedDoc.document_id)}
-                    >
-                      <label>
-                        Document name
-                        <input
-                          name="name"
-                          defaultValue={selectedDoc.name}
-                          maxLength={200}
-                          required
-                        />
-                      </label>
-                      <button type="submit" disabled={busy}>Save name</button>
-                    </form>
-                  )}
-                  {selectedDoc.preview_ready ? (
-                    <AnnotatedPreview
-                      key={selectedDoc.document_id}
-                      documentUrl={base + '/' + selectedDoc.document_id}
-                      page={page}
-                      onPage={next => select(selectedDoc.document_id, next, false)}
-                    />
-                  ) : (
-                    <p role="status">
-                      {selectedPreviewJob === 'failed'
-                        ? 'Preview could not be generated.'
-                        : selectedPreviewJob === 'cancelled'
-                        ? 'Preview was cancelled.'
-                        : selectedPreviewJob === 'running'
-                        ? 'Generating PDF preview…'
-                        : selectedPreviewJob === 'succeeded'
-                        ? 'Loading PDF preview…'
-                        : 'PDF preview is queued.'}
-                    </p>
-                  )}
-                </>
-              ) : (
-                <p className="muted">Select a document to preview it.</p>
+          <aside id="panel-reader" ref={reader} tabIndex={-1} aria-label="Document preview" role="region" className="workspace-reader"
+            data-mobile-active={activeTab === 'reader'} hidden={!readerVisible}>
+            <div className="reader-topline">
+              <nav className="reader-documents" aria-label="Preview sources">
+                {documents.map(doc => <button key={doc.document_id} type="button" title={doc.name}
+                  aria-pressed={selectedId === doc.document_id} onClick={() => select(doc.document_id)}>
+                  {doc.name}
+                </button>)}
+              </nav>
+              <button type="button" className="ghost reader-hide" aria-label="Hide reader" onClick={() => setReaderVisible(false)}>
+                <DesignIcon name="panel" />
+              </button>
+            </div>
+            {selectedDoc ? <>
+              <details className="reader-file-menu" key={selectedDoc.document_id}>
+                <summary><h2>{selectedDoc.name}</h2></summary>
+                <div className="actions">
+                  <button type="button" className="secondary sm" disabled={busy}
+                    onClick={() => download(selectedDoc.document_id)}>Download original</button>
+                  {mayWrite && <button type="button" className="danger sm" disabled={busy}
+                    onClick={() => remove(selectedDoc)}>Delete document</button>}
+                </div>
+                {mayWrite && <form className="inline-form" method="post"
+                  onSubmit={event => rename(event, selectedDoc.document_id)}>
+                  <label>Document name<input name="name" defaultValue={selectedDoc.name} maxLength={200} required /></label>
+                  <button type="submit" disabled={busy} className="sm">Save name</button>
+                </form>}
+              </details>
+              {error && view !== 'library' && <p role="alert"><DesignIcon name="error" /> {error}</p>}
+              {selectedDoc.preview_ready ? <AnnotatedPreview key={selectedDoc.document_id}
+                documentUrl={base + '/' + selectedDoc.document_id} page={page}
+                citation={citation}
+                onPage={next => select(selectedDoc.document_id, next, false)} /> : (
+                <p role="status" className="reader-empty">{selectedPreviewJob === 'failed' ? 'Preview could not be generated.'
+                  : selectedPreviewJob === 'cancelled' ? 'Preview was cancelled.'
+                  : selectedPreviewJob === 'running' ? 'Generating PDF preview…' : 'PDF preview is queued.'}</p>
               )}
-            </aside>
-          </div>
+            </> : <p className="reader-empty muted">Select a document to preview it.</p>}
+          </aside>
         </div>
-      </div>
+      </main>
     </>
   )
 }

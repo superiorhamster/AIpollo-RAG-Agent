@@ -2,13 +2,32 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useState } from 'react'
+import { useId, useState } from 'react'
+import { Brand, DesignIcon } from './aipollo'
+import { useWorkspaceLanguage, WorkspaceLanguage } from './workspace-language'
 import { api, errorMessage } from '../lib/api'
 
-export function AccountMenu() {
+type SearchEntry = { name: string; href: string; kind: 'Workspace' | 'Source'; documentId?: string }
+
+export function AccountMenu({ email, compact = false, admin = false, workspace = false, search = [], onSelectSource }: {
+  email?: string
+  compact?: boolean
+  admin?: boolean
+  workspace?: boolean
+  search?: SearchEntry[]
+  onSelectSource?: (documentId: string) => void
+}) {
   const router = useRouter()
+  const { text } = useWorkspaceLanguage()
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
+  const [query, setQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const searchId = useId()
+  const initials = email?.split('@')[0].split(/[._-]+/).filter(Boolean)
+  const avatar = initials?.length ? (initials.length > 1 ? initials[0][0] + initials[1][0] : initials[0].slice(0, 2)).toUpperCase() : 'U'
+  const matches = query.trim() ? search.filter(entry =>
+    entry.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).slice(0, 8) : []
 
   async function signOut() {
     setPending(true)
@@ -25,30 +44,54 @@ export function AccountMenu() {
   }
 
   return (
-    <header className="topbar">
-      <Link className="brand" href="/workspaces">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z" />
-          <path d="M6 6h10" />
-          <path d="M6 10h10" />
-        </svg>
-        <span>Super Agentic RAG</span>
-      </Link>
-      <nav aria-label="Account navigation">
-        <Link href="/account">Account</Link>
-        <button type="button" className="secondary" disabled={pending} onClick={signOut}>
-          Sign out
-        </button>
+    <header className="aipollo-topbar">
+      <Brand />
+      {admin && <span className="badge badge-warning"><DesignIcon name="admin" /> Admin console</span>}
+      {!admin && search.length > 0 && (
+        <div className="app-search" onBlur={event => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setSearchOpen(false)
+        }} onKeyDown={event => { if (event.key === 'Escape') setSearchOpen(false) }}>
+          <DesignIcon name="search" />
+          <input type="search" aria-label="Search workspaces and sources"
+            aria-controls={searchOpen && query.trim() ? searchId : undefined}
+            placeholder={workspace ? text('Search workspaces, sources…', 'Tìm không gian, tài liệu…') : 'Search workspaces, sources…'} value={query}
+            onFocus={() => setSearchOpen(true)} onChange={event => {
+              setQuery(event.currentTarget.value)
+              setSearchOpen(true)
+            }} />
+          {searchOpen && query.trim() && <ul id={searchId}>
+            {matches.length ? matches.map(entry => (
+              <li key={entry.href}><Link href={entry.href} onClick={event => {
+                if (entry.documentId && onSelectSource && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+                  event.preventDefault()
+                  onSelectSource(entry.documentId)
+                }
+                setQuery('')
+                setSearchOpen(false)
+              }}>
+                <span>{entry.name}</span><span className="muted">{entry.kind}</span>
+              </Link></li>
+            )) : <li className="muted">No matching workspaces or sources.</li>}
+          </ul>}
+        </div>
+      )}
+      <nav className="aipollo-account" aria-label="Account navigation">
+        {workspace && <WorkspaceLanguage />}
+        {admin && <span className="badge badge-neutral admin-private"><DesignIcon name="private" /> Private document content is hidden</span>}
+        {compact ? (
+          <details className="account-popover">
+            <summary aria-label="Account menu" className={admin ? 'admin-avatar' : undefined}>{avatar}</summary>
+            <div>
+              <Link href="/account">Account</Link>
+              <button type="button" className="ghost sm" disabled={pending} onClick={signOut}>Sign out</button>
+            </div>
+          </details>
+        ) : (
+          <>
+            <Link href="/account" className="button secondary sm">Account</Link>
+            <button type="button" className="secondary sm" disabled={pending} onClick={signOut}>Sign out</button>
+          </>
+        )}
       </nav>
       {error && <p role="alert">{error}</p>}
     </header>

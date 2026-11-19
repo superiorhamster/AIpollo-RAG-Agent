@@ -1,7 +1,5 @@
-import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { AccountMenu } from '../../components/account-menu'
-import { ApiError, type Workspace } from '../../lib/api'
+import { ApiError, type Account, type Workspace } from '../../lib/api'
 import { signedInRequest } from '../../lib/gateway'
 import { documentPage, identifier, workspaceLocation } from '../../lib/workspace-location'
 import { DocumentShelf, type DocumentItem } from './document-shelf'
@@ -19,18 +17,14 @@ export default async function WorkspaceDocuments({ params, searchParams }: Conte
   const returnTo = workspaceLocation(workspaceId, selected, initialPage)
   const path = '/v1/workspaces/' + workspaceId
   try {
-    const workspace = await signedInRequest<Workspace>(path, returnTo)
-    const items = await signedInRequest<DocumentItem[]>(path + '/documents', returnTo)
-    return (
-      <>
-        <AccountMenu />
-        <main className="document-page">
-          <Link href="/workspaces" prefetch={false}>Back to workspaces</Link>
-          <h1>{workspace.name}</h1>
-          <DocumentShelf workspace={workspace} items={items} selected={selected} initialPage={initialPage} />
-        </main>
-      </>
-    )
+    const [workspace, items, workspaces, account] = await Promise.all([
+      signedInRequest<Workspace>(path, returnTo),
+      signedInRequest<DocumentItem[]>(path + '/documents', returnTo),
+      signedInRequest<Workspace[]>('/v1/workspaces', returnTo),
+      signedInRequest<Account>('/v1/auth/me', returnTo),
+    ])
+    return <DocumentShelf key={returnTo} workspace={workspace} workspaces={workspaces} email={account.email}
+      items={items} selected={selected} initialPage={initialPage} />
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) notFound()
     throw error

@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Super Agentic RAG',
+  title: 'AIpollo · Super Agentic RAG',
 }
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
