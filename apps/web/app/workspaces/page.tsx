@@ -9,7 +9,10 @@ export default async function WorkspacesPage() {
     <>
       <AccountMenu />
       <main>
-        <h1>Workspaces</h1>
+        <div style={{ marginBottom: '1.5rem' }}>
+          <h1>Workspaces</h1>
+          <p className="muted">Manage your research workspaces, document collections, and collaborator access.</p>
+        </div>
         <WorkspaceList initial={workspaces} />
       </main>
     </>

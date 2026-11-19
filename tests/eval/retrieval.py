@@ -5,11 +5,13 @@ import json
 import os
 import statistics
 import time
+import sys
 from pathlib import Path
 from uuid import NAMESPACE_DNS, uuid4, uuid5
 
 import httpx
 
+sys.path.insert(0, "/app")
 from app.main import fixture_vector
 
 DATA = json.loads(Path(__file__).with_name("corpus-v1.json").read_text())

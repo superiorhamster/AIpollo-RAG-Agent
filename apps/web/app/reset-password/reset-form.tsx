@@ -7,6 +7,7 @@ export function ResetForm({ token }: { token?: string }) {
   const [pending, setPending] = useState(false)
   const [sent, setSent] = useState(false)
   const [error, setError] = useState('')
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const values = new FormData(event.currentTarget)
@@ -15,7 +16,11 @@ export function ResetForm({ token }: { token?: string }) {
     try {
       const email = String(values.get('email'))
       if (token) {
-        await api('/v1/auth/password-reset/confirm', 'POST', { email, token, password: String(values.get('password')) })
+        await api('/v1/auth/password-reset/confirm', 'POST', {
+          email,
+          token,
+          password: String(values.get('password')),
+        })
         window.history.replaceState(null, '', '/reset-password')
       } else {
         await api('/v1/auth/password-reset', 'POST', { email })
@@ -27,13 +32,53 @@ export function ResetForm({ token }: { token?: string }) {
       setPending(false)
     }
   }
-  if (sent) return <p role="status">{token ? 'Password changed. Sign in with your new password.'
-    : 'If this address can receive a reset link, check your email.'}</p>
-  return <form className="form-stack" onSubmit={submit}>
-    <label>Email<input type="email" name="email" required autoComplete="email" /></label>
-    {token && <label>New password<input type="password" name="password" required minLength={8}
-      maxLength={128} autoComplete="new-password" /></label>}
-    {error && <p role="alert">{error}</p>}
-    <button disabled={pending}>{token ? 'Update password' : 'Send reset link'}</button>
-  </form>
+
+  if (sent) {
+    return (
+      <div style={{ display: 'grid', gap: '0.75rem' }}>
+        <span className="badge badge-success">Request Processed</span>
+        <p role="status">
+          {token
+            ? 'Password changed. Sign in with your new password.'
+            : 'If this address can receive a reset link, check your email.'}
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <form className="form-stack" onSubmit={submit}>
+      <label>
+        Email
+        <input
+          type="email"
+          name="email"
+          required
+          autoComplete="email"
+          placeholder="scholar@university.edu"
+        />
+      </label>
+
+      {token && (
+        <label>
+          New password
+          <input
+            type="password"
+            name="password"
+            required
+            minLength={8}
+            maxLength={128}
+            autoComplete="new-password"
+            placeholder="••••••••"
+          />
+        </label>
+      )}
+
+      {error && <p role="alert">{error}</p>}
+
+      <button type="submit" disabled={pending}>
+        {token ? 'Update password' : 'Send reset link'}
+      </button>
+    </form>
+  )
 }

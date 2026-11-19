@@ -18,9 +18,21 @@ export function UserId({ value }: { value: string }) {
 
   return (
     <div className="form-stack">
-      <label>User ID<input ref={field} value={value} readOnly /></label>
-      <button className="secondary" type="button" onClick={copy}>Copy user ID</button>
-      <p role="status" className="muted">{message}</p>
+      <label>
+        User ID
+        <input
+          ref={field}
+          value={value}
+          readOnly
+          style={{ fontFamily: 'var(--font-mono)', fontSize: '0.9rem', letterSpacing: '0.02em' }}
+        />
+      </label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <button className="secondary sm" type="button" onClick={copy}>
+          Copy user ID
+        </button>
+        {message && <span role="status" className="muted">{message}</span>}
+      </div>
     </div>
   )
 }

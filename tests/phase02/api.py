@@ -7,6 +7,7 @@ import sys
 import tarfile
 import time
 import unittest
+import os
 import zipfile
 from uuid import UUID, uuid4
 
@@ -14,18 +15,21 @@ import httpx
 import psycopg
 
 API = "http://api-gateway:8000"
-ORIGIN = "http://127.0.0.1:3000"
+ORIGIN = os.environ.get("WEB_ORIGIN", "http://127.0.0.1:3000")
 PASSWORD = "Phase2!a"
 PDF = "application/pdf"
 
 
 def pdf() -> bytes:
-    contents = b"BT /F1 20 Tf 20 150 Td (Academic source) Tj ET"
+    contents = (
+        b"BT\n/F1 14 Tf\n72 700 Td\n(Academic source reference and study notes.) Tj\n"
+        b"0 -20 Td\n(This source provides evidence for citation analysis across research papers.) Tj\nET"
+    )
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 240] /Resources << /Font << /F1 6 0 R >> >> /Contents 5 0 R >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 240] /Resources << /Font << /F1 6 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >> /Contents 5 0 R >>",
         f"<< /Length {len(contents)} >>\nstream\n".encode() + contents + b"\nendstream",
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     ]

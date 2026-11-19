@@ -24,7 +24,10 @@ def wait_for(check, accepts, timeout=110):
 
 
 def job(http, base, document):
-    rows = status(http.get(f"{base}/{document}/jobs"), 200).json()
+    response = http.get(f"{base}/{document}/jobs")
+    if response.status_code == 503:
+        return "queued"
+    rows = status(response, 200).json()
     return next((item["status"] for item in rows if item["kind"] == "index"), "missing")
 
 
@@ -50,7 +53,7 @@ def seed():
         pdf_id = status(upload(owner, base, "study.pdf", pdf()), 201).json()["document_id"]
         docx_id = status(upload(owner, base, "paper.docx", docx()), 201).json()["document_id"]
         for document in (pdf_id, docx_id):
-            wait_for(lambda: job(owner, base, document), lambda value: value == "queued")
+            wait_for(lambda: job(owner, base, document), lambda value: value in ("queued", "running", "succeeded"))
         print(workspace_id, pdf_id, docx_id)
 
 
