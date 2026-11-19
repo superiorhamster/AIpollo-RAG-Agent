@@ -1,0 +1,32 @@
+{
+  "version": "v1",
+  "description": "Synthetic bilingual excerpts and retrieval labels. No private academic documents.",
+  "documents": [
+    {"id": "vi-quang-hop", "text": "Quang hợp chuyển năng lượng ánh sáng thành năng lượng hóa học. Cây hấp thụ carbon dioxide và nước để tạo chất hữu cơ."},
+    {"id": "vi-hoi-quy", "text": "Hệ số hồi quy tuyến tính đo thay đổi trung bình của biến phụ thuộc khi biến giải thích tăng một đơn vị."},
+    {"id": "vi-thien-lech", "text": "Thiên lệch chọn mẫu xuất hiện khi người tham gia khác có hệ thống với quần thể mục tiêu."},
+    {"id": "vi-ky-thuat", "text": "Van một chiều ngăn dòng chảy ngược trong hệ thống thủy lực. Áp suất chênh lệch đóng mở van."},
+    {"id": "vi-tuong-quan", "text": "Tương quan thống kê giữa hai biến không tự chứng minh quan hệ nhân quả. Cần xét các yếu tố gây nhiễu."},
+    {"id": "vi-khoang", "text": "Khoảng tin cậy 95 phần trăm được tính từ phân bố lấy mẫu và sai số chuẩn của ước lượng."},
+    {"id": "en-control", "text": "A randomized control group supports causal inference by balancing confounders across study arms."},
+    {"id": "en-inflation", "text": "The consumer price index measures changes in the price of a representative basket of goods and services."},
+    {"id": "en-precision", "text": "Precision is the share of predicted positive instances that are true positives. Recall is the share of actual positives identified."},
+    {"id": "en-evidence", "text": "An evidence table records the method, population, outcome, and limitations for each included paper."},
+    {"id": "en-vector", "text": "Cosine similarity compares vector directions using the dot product divided by the product of their norms."},
+    {"id": "en-migration", "text": "An additive database migration creates new columns while preserving existing records for a rolling upgrade."}
+  ],
+  "queries": [
+    {"query": "Quang hợp dùng năng lượng gì", "relevant": ["vi-quang-hop"]},
+    {"query": "Ý nghĩa hệ số hồi quy tuyến tính", "relevant": ["vi-hoi-quy"]},
+    {"query": "Thiên lệch chọn mẫu và quần thể mục tiêu", "relevant": ["vi-thien-lech"]},
+    {"query": "Van nào ngăn dòng chảy ngược", "relevant": ["vi-ky-thuat"]},
+    {"query": "Tương quan có chứng minh quan hệ nhân quả không", "relevant": ["vi-tuong-quan"]},
+    {"query": "Khoảng tin cậy và sai số chuẩn", "relevant": ["vi-khoang"]},
+    {"query": "How does randomized control balance confounders", "relevant": ["en-control"]},
+    {"query": "What representative basket does consumer price index measure", "relevant": ["en-inflation"]},
+    {"query": "Precision recall true positives", "relevant": ["en-precision"]},
+    {"query": "Evidence table method population outcome limitations", "relevant": ["en-evidence"]},
+    {"query": "Cosine similarity dot product", "relevant": ["en-vector"]},
+    {"query": "Additive database migration preserves existing records", "relevant": ["en-migration"]}
+  ]
+}

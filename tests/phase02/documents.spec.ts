@@ -1,0 +1,41 @@
+import { expect, test } from '@playwright/test'
+
+test('uploads PDF and DOCX, navigates pages, downloads the original, and deletes the workspace', async ({ page }) => {
+  const email = `documents-web-${Date.now()}@example.com`
+  await page.goto('/register')
+  await page.getByLabel('Email').fill(email)
+  await page.getByLabel('Password', { exact: true }).fill('Phase2!a')
+  await page.getByRole('button', { name: 'Create account', exact: true }).click()
+  await expect(page).toHaveURL(/\/sign-in$/)
+  await page.getByLabel('Email').fill(email)
+  await page.getByLabel('Password', { exact: true }).fill('Phase2!a')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Workspace name' }).fill('Research sources')
+  await page.getByRole('button', { name: 'Create workspace' }).click()
+  await page.getByRole('article', { name: 'Research sources' }).getByRole('link', { name: 'Documents' }).click()
+
+  await page.getByLabel('Document file').setInputFiles('/fixtures/study.pdf')
+  await page.getByRole('button', { name: 'Upload document' }).click()
+  await expect(page.getByText('Page 1 of 2')).toBeVisible({ timeout: 12000 })
+  await expect.poll(async () => page.getByRole('img', { name: 'PDF page 1' }).evaluate((canvas: HTMLCanvasElement) => (
+    canvas.getContext('2d')?.getImageData(0, 0, 1, 1).data[3] ?? 0
+  ))).toBeGreaterThan(0)
+  await page.getByRole('button', { name: 'Next page' }).click()
+  await expect(page.getByText('Page 2 of 2')).toBeVisible()
+  await expect(page).toHaveURL(/page=2/)
+  await page.reload()
+  await expect(page.getByText('Page 2 of 2')).toBeVisible({ timeout: 12000 })
+
+  await page.getByLabel('Document file').setInputFiles('/fixtures/paper.docx')
+  await page.getByRole('button', { name: 'Upload document' }).click()
+  await expect(page.getByRole('heading', { name: 'paper.docx' })).toBeVisible()
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Download original' }).click()
+  expect((await download).suggestedFilename()).toBe('paper.docx')
+  await expect(page.getByText('Page 1 of 1')).toBeVisible({ timeout: 35000 })
+
+  await page.getByRole('link', { name: 'Back to workspaces' }).click()
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('article', { name: 'Research sources' }).getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(page.getByText('You have no workspaces yet.')).toBeVisible()
+})

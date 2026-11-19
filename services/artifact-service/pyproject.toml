@@ -1,0 +1,13 @@
+[project]
+name = "artifact-service"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic==1.20.1",
+    "httpx==0.28.1",
+    "psycopg[binary]==3.3.9",
+    "python-docx==1.2.0",
+    "sqlalchemy[asyncio]==2.1.8",
+    "fastapi==0.163.1",
+    "uvicorn==0.54.0",
+]

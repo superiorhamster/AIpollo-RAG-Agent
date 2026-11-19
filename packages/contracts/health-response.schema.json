@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Application health response",
+  "type": "object",
+  "properties": {
+    "service": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "status": { "enum": ["ok", "ready", "unavailable"] }
+  },
+  "required": ["service", "status"],
+  "additionalProperties": false
+}

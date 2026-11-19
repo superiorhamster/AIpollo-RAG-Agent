@@ -1,0 +1,10 @@
+*
+!app/
+!app/**
+!next.config.ts
+!package.json
+!pnpm-lock.yaml
+!proxy.ts
+!tsconfig.json
+!scripts/
+!scripts/**

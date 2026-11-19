@@ -1,0 +1,196 @@
+"""Provider-facing embedding API. Domain services receive validated vectors only."""
+
+import hashlib
+import json
+import hmac
+import math
+import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Literal
+from urllib.parse import urlsplit
+
+import httpx
+from fastapi import FastAPI, Request
+from pydantic import BaseModel, Field, ValidationError
+
+from rag_http import ApiError, health_response, install_http, request_id, require_service, unauthorized
+from rag_index import EmbeddingBatch, EmbeddingConfig, EmbeddingResult
+
+SERVICE = "model-gateway"
+
+
+def model_unavailable() -> ApiError:
+    return ApiError(503, "model_unavailable", "The embedding model is not configured or available.")
+
+
+def valid_provider_url(url: str) -> bool:
+    parsed = urlsplit(url)
+    if not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return False
+    if parsed.scheme == "https":
+        return True
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname in {"host.docker.internal", "localhost", "127.0.0.1", "::1"}
+        and os.environ.get("MODEL_ALLOW_LOCAL_HTTP") == "true"
+    )
+
+
+def load_embedding_config() -> EmbeddingConfig | None:
+    if os.environ.get("MODEL_PROVIDER") == "fixture":
+        return EmbeddingConfig(fingerprint=hashlib.sha256(b"rag-test-embedding-v1").hexdigest(), dimensions=64)
+    endpoint = os.environ.get("MODEL_EMBEDDING_BASE_URL", "").rstrip("/")
+    model = os.environ.get("MODEL_EMBEDDING_NAME")
+    key = os.environ.get("MODEL_EMBEDDING_API_KEY")
+    dimensions = os.environ.get("MODEL_EMBEDDING_DIMENSIONS")
+    if os.environ.get("MODEL_PROVIDER") != "openai-compatible" or not all((endpoint, model, key, dimensions)):
+        return None
+    if not valid_provider_url(endpoint):
+        raise ValueError("Set a valid embedding provider URL using HTTPS or explicitly enabled local HTTP.")
+    revision = os.environ.get("MODEL_EMBEDDING_REVISION", "1")
+    version = hashlib.sha256(f"{endpoint}\n{model}\n{dimensions}\n{revision}".encode()).hexdigest()
+    return EmbeddingConfig(fingerprint=version, dimensions=int(dimensions))
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    app.state.embedding_config = load_embedding_config()
+    app.state.token = os.environ["MODEL_EMBEDDING_TOKEN"].encode()
+    async with httpx.AsyncClient(timeout=httpx.Timeout(25, connect=5), trust_env=False) as client:
+        app.state.client = client
+        yield
+
+
+app = FastAPI(title=SERVICE, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+install_http(app)
+
+
+def verify_caller(request: Request) -> None:
+    if not hmac.compare_digest(request.headers.get("X-Embedding-Service-Token", "").encode(), app.state.token):
+        raise unauthorized()
+
+
+def fixture_vector(text: str, dimensions: int) -> list[float]:
+    vector = [0.0] * dimensions
+    for word in text.casefold().split():
+        digest = hashlib.sha256(word.encode()).digest()
+        vector[digest[0] % dimensions] += 1.0 if digest[1] % 2 else -1.0
+    scale = math.hypot(*vector)
+    return [value / scale for value in vector] if scale else [1.0] + [0.0] * (dimensions - 1)
+
+
+@app.get("/healthz")
+async def health() -> dict[str, str]:
+    return {"service": SERVICE, "status": "ok"}
+
+
+@app.get("/readyz")
+async def readiness():
+    return health_response(SERVICE, True)
+
+
+@app.get("/internal/v1/embedding-config")
+async def embedding_config(request: Request) -> EmbeddingConfig:
+    verify_caller(request)
+    config = app.state.embedding_config
+    if config is None:
+        raise model_unavailable()
+    return config
+
+
+@app.post("/internal/v1/embeddings")
+async def embed(data: EmbeddingBatch, request: Request) -> EmbeddingResult:
+    config = await embedding_config(request)
+    if config.fingerprint != data.fingerprint:
+        raise ApiError(409, "model_changed", "The embedding model configuration changed.")
+    if os.environ.get("MODEL_PROVIDER") == "fixture":
+        return EmbeddingResult(vectors=[fixture_vector(item, config.dimensions) for item in data.texts])
+
+    try:
+        response = await app.state.client.post(
+            os.environ["MODEL_EMBEDDING_BASE_URL"].rstrip("/") + "/embeddings",
+            headers={"Authorization": "Bearer " + os.environ["MODEL_EMBEDDING_API_KEY"],
+                     "X-Request-ID": request_id(request)},
+            json={"model": os.environ["MODEL_EMBEDDING_NAME"], "input": data.texts},
+        )
+    except httpx.HTTPError as exc:
+        raise ApiError(503, "provider_unavailable", "The embedding provider could not be reached.") from exc
+    if response.status_code in (401, 403):
+        raise model_unavailable()
+    if response.status_code != 200:
+        raise ApiError(503, "provider_unavailable", "The embedding provider rejected the request.")
+    try:
+        rows = sorted(response.json()["data"], key=lambda item: item["index"])
+        if [row["index"] for row in rows] != list(range(len(data.texts))):
+            raise ValueError("Invalid embedding batch order")
+        result = EmbeddingResult(vectors=[row["embedding"] for row in rows])
+        if any(len(vector) != config.dimensions or not any(vector) for vector in result.vectors):
+            raise ValueError("Invalid embedding dimensions or zero vector")
+    except (ValueError, KeyError, TypeError, ValidationError) as exc:
+        raise ApiError(502, "invalid_embedding", "The provider returned invalid embeddings.") from exc
+    return result
+
+
+class Message(BaseModel):
+    role: Literal["system", "user"]
+    content: str = Field(min_length=1, max_length=24_000)
+
+
+class CompletionInput(BaseModel):
+    messages: list[Message] = Field(min_length=1, max_length=8)
+    max_tokens: int = Field(default=800, ge=32, le=2048)
+
+
+class CompletionOutput(BaseModel):
+    text: str = Field(min_length=1, max_length=18_000)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+
+
+@app.post("/internal/v1/completions")
+async def completion(data: CompletionInput, request: Request) -> CompletionOutput:
+    require_service(request, "X-Model-Service-Token", os.environ["MODEL_CHAT_TOKEN"])
+    if os.environ.get("MODEL_PROVIDER") == "fixture":
+        payload = json.loads(data.messages[-1].content)
+        sources = payload["evidence"]
+        first = sources[0]
+        fields = {name: first["text"][:600] for name in payload.get("fields", [])}
+        return CompletionOutput(text=json.dumps({"claims": [{
+            "text": first["text"], "evidence": [first["id"]], "fields": fields,
+        }]}))
+    base = os.environ.get("MODEL_CHAT_BASE_URL", "").rstrip("/")
+    model = os.environ.get("MODEL_CHAT_NAME", "")
+    key = os.environ.get("MODEL_CHAT_API_KEY", "")
+    if (os.environ.get("MODEL_PROVIDER") != "openai-compatible" or not model or not key
+            or not valid_provider_url(base)):
+        raise ApiError(503, "chat_model_unavailable", "The chat model is not configured.")
+    try:
+        response = await app.state.client.post(
+            base + "/chat/completions",
+            headers={"Authorization": "Bearer " + key, "X-Request-ID": request_id(request)},
+            json={"model": model, "max_tokens": data.max_tokens,
+                  "messages": [item.model_dump() for item in data.messages]},
+        )
+        response.raise_for_status()
+        result = response.json()
+        usage = result.get("usage") or {}
+        return CompletionOutput(text=result["choices"][0]["message"]["content"],
+                                input_tokens=usage.get("prompt_tokens"),
+                                output_tokens=usage.get("completion_tokens"))
+    except (httpx.HTTPError, ValueError, KeyError, IndexError, ValidationError) as exc:
+        raise ApiError(503, "chat_provider_unavailable", "The chat provider could not complete the request.") from exc
+
+
+@app.get("/internal/v1/admin/models", include_in_schema=False)
+async def admin_models(request: Request):
+    require_service(request, "X-Admin-Service-Token", os.environ["ADMIN_DOMAIN_TOKEN"])
+    config = app.state.embedding_config
+    return {
+        "provider": os.environ.get("MODEL_PROVIDER", "disabled"),
+        "embedding_model": os.environ.get("MODEL_EMBEDDING_NAME") or None,
+        "embedding_ready": config is not None,
+        "dimensions": config.dimensions if config else None,
+        "chat_model": os.environ.get("MODEL_CHAT_NAME") or None,
+        "chat_ready": bool(os.environ.get("MODEL_CHAT_NAME") and os.environ.get("MODEL_CHAT_API_KEY")),
+    }

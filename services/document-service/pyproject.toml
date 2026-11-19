@@ -1,0 +1,15 @@
+[project]
+name = "document-service"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.163.1",
+    "aio-pika==10.2.3",
+    "alembic==1.20.1",
+    "httpx==0.28.1",
+    "psycopg[binary]==3.3.9",
+    "sqlalchemy[asyncio]==2.1.8",
+    "minio==7.2.20",
+    "urllib3==2.8.0",
+    "uvicorn==0.54.0",
+]

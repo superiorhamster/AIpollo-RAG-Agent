@@ -1,0 +1,5 @@
+*
+!package.json
+!pnpm-lock.yaml
+!playwright.config.ts
+!workspace.spec.ts

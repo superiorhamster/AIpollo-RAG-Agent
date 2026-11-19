@@ -1,0 +1,58 @@
+name: Development stack
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate and start the development stack
+        run: |
+          make compose-check
+          make bootstrap
+      - name: Check host entry points
+        run: |
+          web=$(docker compose --env-file .env -f compose.dev.yaml port web 3000)
+          gateway=$(docker compose --env-file .env -f compose.dev.yaml port api-gateway 8000)
+          curl --fail --silent --show-error --max-time 5 "http://$web/" -o /dev/null
+          curl --fail --silent --show-error --max-time 5 "http://$gateway/readyz"
+      - name: Verify identity and workspace behavior
+        run: make verify-phase01
+      - name: Verify document lifecycle
+        run: make verify-phase02
+      - name: Verify indexing, scoped retrieval, and accepted Plan execution
+        run: make verify-phase03
+      - name: Install Grype
+        id: grype
+        uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+      - name: Report image vulnerabilities
+        env:
+          GRYPE: ${{ steps.grype.outputs.cmd }}
+        run: |
+          containers=$(docker compose --env-file .env -f compose.dev.yaml ps --all --quiet)
+          images=$(xargs -r docker inspect --format '{{.Config.Image}}' <<< "$containers" | sort -u)
+          test -n "$images"
+          while IFS= read -r image; do
+            "$GRYPE" "docker:$image"
+          done <<< "$images"
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          if [ -f .env ]; then
+            docker compose --env-file .env -f compose.dev.yaml logs --tail=100
+          fi
+      - name: Clean up CI containers and volumes
+        if: always()
+        run: |
+          if [ -f .env ]; then
+            make clean-infra
+          fi

@@ -1,0 +1,147 @@
+name: super-agentic-rag
+
+services:
+  web:
+    image: ${RAG_WEB_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    ports: !reset []
+    restart: unless-stopped
+
+  api-gateway:
+    image: ${RAG_API_GATEWAY_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    ports: !reset []
+    restart: unless-stopped
+
+  auth-service:
+    image: ${RAG_AUTH_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    restart: unless-stopped
+
+  workspace-service:
+    image: ${RAG_WORKSPACE_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    restart: unless-stopped
+
+  document-service:
+    image: ${RAG_DOCUMENT_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    restart: unless-stopped
+
+  document-converter:
+    image: ${RAG_CONVERTER_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    restart: unless-stopped
+
+  document-parser:
+    image: ${RAG_PARSER_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    restart: unless-stopped
+
+  document-infra-init:
+    image: ${RAG_DOCUMENT_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+
+  document-migrate:
+    image: ${RAG_DOCUMENT_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+
+  workspace-migrate:
+    image: ${RAG_WORKSPACE_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+
+  auth-migrate:
+    image: ${RAG_AUTH_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+
+  ingestion-migrate:
+    image: ${RAG_INGESTION_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+
+  ingestion-service:
+    image: ${RAG_INGESTION_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    restart: unless-stopped
+
+  retrieval-service:
+    image: ${RAG_RETRIEVAL_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    restart: unless-stopped
+
+  agent-orchestrator:
+    image: ${RAG_ORCHESTRATOR_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    restart: unless-stopped
+
+  orchestration-migrate:
+    image: ${RAG_ORCHESTRATOR_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+
+  artifact-service:
+    image: ${RAG_ARTIFACT_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    restart: unless-stopped
+
+  artifact-migrate:
+    image: ${RAG_ARTIFACT_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+
+  model-gateway:
+    extra_hosts: !reset []
+    environment:
+      MODEL_ALLOW_LOCAL_HTTP: "false"
+    image: ${RAG_MODEL_GATEWAY_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    restart: unless-stopped
+
+  admin-service:
+    image: ${RAG_ADMIN_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    restart: unless-stopped
+
+  minio:
+    image: ${RAG_MINIO_IMAGE:?Set a reviewed image digest}
+    build: !reset null
+    ports: !reset []
+    restart: unless-stopped
+
+  postgres:
+    image: ${RAG_POSTGRES_IMAGE:?Set a reviewed image digest}
+    ports: !reset []
+    restart: unless-stopped
+
+  db-init:
+    image: ${RAG_POSTGRES_IMAGE:?Set a reviewed image digest}
+
+  rabbitmq:
+    image: ${RAG_RABBITMQ_IMAGE:?Set a reviewed image digest}
+    ports: !reset []
+    restart: unless-stopped
+
+  redis:
+    image: ${RAG_REDIS_IMAGE:?Set a reviewed image digest}
+    ports: !reset []
+    restart: unless-stopped
+
+  qdrant:
+    image: ${RAG_QDRANT_IMAGE:?Set a reviewed image digest}
+    ports: !reset []
+    restart: unless-stopped
+
+  caddy:
+    image: ${RAG_CADDY_IMAGE:?Set a reviewed image digest}
+    environment:
+      PRODUCTION_HOSTNAME: ${PRODUCTION_HOSTNAME:?Set the public hostname}
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

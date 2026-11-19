@@ -1,0 +1,519 @@
+name: super-agentic-rag-dev
+
+x-backend-build: &backend-build
+  context: ./services
+  target: runtime
+
+x-database: &database
+  DB_HOST: postgres
+  DB_NAME: ${POSTGRES_DB:?Run make env and set POSTGRES_DB}
+
+x-web-origin: &web-origin ${WEB_ORIGIN:-http://127.0.0.1:${WEB_PORT:-23000}}
+
+x-auth-build: &auth-build
+  <<: *backend-build
+  args: { SERVICE: auth-service }
+
+x-workspace-build: &workspace-build
+  <<: *backend-build
+  args: { SERVICE: workspace-service }
+
+x-document-build: &document-build
+  <<: *backend-build
+  args: { SERVICE: document-service }
+
+x-ingestion-build: &ingestion-build
+  <<: *backend-build
+  args: { SERVICE: ingestion-service }
+
+services:
+  web:
+    build: ./apps/web
+    environment:
+      API_GATEWAY_URL: http://api-gateway:8000
+      WEB_ORIGIN: *web-origin
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WEB_PORT:-23000}:3000"
+
+  api-gateway:
+    build:
+      <<: *backend-build
+      args: { SERVICE: api-gateway }
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      ADMIN_URL: http://admin-service:8000
+      ARTIFACT_URL: http://artifact-service:8000
+      AUTH_URL: http://auth-service:8000
+      WORKSPACE_URL: http://workspace-service:8000
+      DOCUMENT_URL: http://document-service:8000
+      INGESTION_URL: http://ingestion-service:8000
+      RETRIEVAL_URL: http://retrieval-service:8000
+      ORCHESTRATOR_URL: http://agent-orchestrator:8000
+      REDIS_URL: redis://redis:6379/0
+      WEB_ORIGIN: *web-origin
+      AUTH_PEER_LIMIT: ${AUTH_PEER_LIMIT:-100}
+      AUTH_RATE_WINDOW_SECONDS: ${AUTH_RATE_WINDOW_SECONDS:-900}
+    depends_on:
+      admin-service:
+        condition: service_healthy
+      artifact-service:
+        condition: service_healthy
+      agent-orchestrator:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      workspace-service:
+        condition: service_healthy
+      document-service:
+        condition: service_healthy
+      ingestion-service:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${API_GATEWAY_PORT:-23001}:8000"
+
+  auth-service:
+    build: *auth-build
+    environment:
+      ADMIN_DOMAIN_TOKEN: ${ADMIN_DOMAIN_TOKEN:?Run make env}
+      <<: *database
+      DB_USER: rag_auth
+      DB_PASSWORD: ${AUTH_DB_PASSWORD:?Run make env}
+      REDIS_URL: redis://redis:6379/0
+      WEB_ORIGIN: *web-origin
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      AUTH_WORKSPACE_TOKEN: ${AUTH_WORKSPACE_TOKEN:?Run make env}
+      AUTH_ACCOUNT_LIMIT: ${AUTH_ACCOUNT_LIMIT:-10}
+      AUTH_RATE_WINDOW_SECONDS: ${AUTH_RATE_WINDOW_SECONDS:-900}
+      AUTH_JWT_SIGNING_KEY: ${AUTH_JWT_SIGNING_KEY:?Run make env}
+      AUTH_ACCESS_TTL_SECONDS: ${AUTH_ACCESS_TTL_SECONDS:-300}
+      AUTH_SESSION_TTL_SECONDS: ${AUTH_SESSION_TTL_SECONDS:-43200}
+    depends_on:
+      auth-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  workspace-service:
+    build: *workspace-build
+    environment:
+      CROSSREF_MAILTO: ${CROSSREF_MAILTO:-}
+      WORKSPACE_INTERACTION_TOKEN: ${WORKSPACE_INTERACTION_TOKEN:?Run make env}
+      <<: *database
+      DB_USER: rag_workspace
+      DB_PASSWORD: ${WORKSPACE_DB_PASSWORD:?Run make env}
+      AUTH_URL: http://auth-service:8000
+      WORKSPACE_DOCUMENT_TOKEN: ${WORKSPACE_DOCUMENT_TOKEN:?Run make env}
+      BROKER_USER: rag-workspace
+      BROKER_PASSWORD: ${WORKSPACE_BROKER_PASSWORD:?Run make env}
+      AUTH_WORKSPACE_TOKEN: ${AUTH_WORKSPACE_TOKEN:?Run make env}
+    depends_on:
+      workspace-migrate:
+        condition: service_completed_successfully
+      document-infra-init:
+        condition: service_completed_successfully
+      auth-service:
+        condition: service_healthy
+
+  db-init:
+    image: postgres:17-alpine
+    command: ["psql", "-X", "--file=/provision.sql"]
+    environment:
+      ARTIFACT_DB_PASSWORD: ${ARTIFACT_DB_PASSWORD:?Run make env}
+      ARTIFACT_MIGRATION_PASSWORD: ${ARTIFACT_MIGRATION_PASSWORD:?Run make env}
+      ORCHESTRATION_DB_PASSWORD: ${ORCHESTRATION_DB_PASSWORD:?Run make env}
+      ORCHESTRATION_MIGRATION_PASSWORD: ${ORCHESTRATION_MIGRATION_PASSWORD:?Run make env}
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:?Run make env}
+      PGUSER: ${POSTGRES_USER:?Run make env}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Run make env}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?Run make env}
+      AUTH_MIGRATION_PASSWORD: ${AUTH_MIGRATION_PASSWORD:?Run make env}
+      WORKSPACE_DB_PASSWORD: ${WORKSPACE_DB_PASSWORD:?Run make env}
+      WORKSPACE_MIGRATION_PASSWORD: ${WORKSPACE_MIGRATION_PASSWORD:?Run make env}
+      DOCUMENT_DB_PASSWORD: ${DOCUMENT_DB_PASSWORD:?Run make env}
+      DOCUMENT_MIGRATION_PASSWORD: ${DOCUMENT_MIGRATION_PASSWORD:?Run make env}
+      INGESTION_DB_PASSWORD: ${INGESTION_DB_PASSWORD:?Run make env}
+      INGESTION_MIGRATION_PASSWORD: ${INGESTION_MIGRATION_PASSWORD:?Run make env}
+    volumes:
+      - ./infra/postgres/provision.sql:/provision.sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  auth-migrate:
+    build: *auth-build
+    command: ["alembic", "-c", "app/alembic.ini", "upgrade", "head"]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *database
+      DB_USER: rag_auth_migrate
+      DB_PASSWORD: ${AUTH_MIGRATION_PASSWORD:?Run make env}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  workspace-migrate:
+    build: *workspace-build
+    command: ["alembic", "-c", "app/alembic.ini", "upgrade", "head"]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *database
+      DB_USER: rag_workspace_migrate
+      DB_PASSWORD: ${WORKSPACE_MIGRATION_PASSWORD:?Run make env}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  phase01-browser-tests:
+    profiles: [phase01-test]
+    build: ./tests/phase01
+    network_mode: service:web
+    environment:
+      PHASE01_TEST_ORIGIN: http://127.0.0.1:3000
+
+  document-service:
+    build: *document-build
+    environment:
+      DOCUMENT_RETRIEVAL_TOKEN: ${DOCUMENT_RETRIEVAL_TOKEN:?Run make env}
+      <<: *database
+      DB_USER: rag_documents
+      DB_PASSWORD: ${DOCUMENT_DB_PASSWORD:?Run make env}
+      WORKSPACE_DOCUMENT_TOKEN: ${WORKSPACE_DOCUMENT_TOKEN:?Run make env}
+      DOCUMENT_INGESTION_TOKEN: ${DOCUMENT_INGESTION_TOKEN:?Run make env}
+      DOCUMENT_BUCKET: ${DOCUMENT_BUCKET:-rag-documents}
+      DOCUMENT_STORAGE_PASSWORD: ${DOCUMENT_STORAGE_PASSWORD:?Run make env}
+      BROKER_USER: rag-document
+      BROKER_PASSWORD: ${DOCUMENT_BROKER_PASSWORD:?Run make env}
+    depends_on:
+      document-migrate:
+        condition: service_completed_successfully
+      document-infra-init:
+        condition: service_completed_successfully
+      workspace-service:
+        condition: service_healthy
+
+  ingestion-service:
+    build: *ingestion-build
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      ADMIN_DOMAIN_TOKEN: ${ADMIN_DOMAIN_TOKEN:?Run make env}
+      <<: *database
+      DB_USER: rag_ingestion
+      DB_PASSWORD: ${INGESTION_DB_PASSWORD:?Run make env}
+      DOCUMENT_INGESTION_TOKEN: ${DOCUMENT_INGESTION_TOKEN:?Run make env}
+      BROKER_USER: rag-ingestion
+      BROKER_PASSWORD: ${INGESTION_BROKER_PASSWORD:?Run make env}
+      MODEL_EMBEDDING_TOKEN: ${MODEL_EMBEDDING_TOKEN:?Run make env}
+      INGESTION_RETRIEVAL_TOKEN: ${INGESTION_RETRIEVAL_TOKEN:?Run make env}
+    networks: [default, document-preview, document-parse]
+    depends_on:
+      ingestion-migrate:
+        condition: service_completed_successfully
+      document-service:
+        condition: service_healthy
+      document-converter:
+        condition: service_healthy
+      document-parser:
+        condition: service_healthy
+      model-gateway:
+        condition: service_healthy
+      retrieval-service:
+        condition: service_healthy
+
+  document-converter:
+    build:
+      <<: *ingestion-build
+      target: converter
+    networks: [document-preview]
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=268435456
+    mem_limit: 768m
+    cpus: 1
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+
+  document-parser:
+    build:
+      <<: *backend-build
+      target: parser
+      args: { SERVICE: document-parser }
+    networks: [document-parse]
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=268435456
+    mem_limit: 4g
+    cpus: 2
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+
+  document-infra-init:
+    build: *document-build
+    command: ["python", "-m", "app.provision"]
+    healthcheck:
+      disable: true
+    environment:
+      DOCUMENT_BUCKET: ${DOCUMENT_BUCKET:-rag-documents}
+      DOCUMENT_STORAGE_PASSWORD: ${DOCUMENT_STORAGE_PASSWORD:?Run make env}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Run make env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Run make env}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?Run make env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Run make env}
+      WORKSPACE_BROKER_PASSWORD: ${WORKSPACE_BROKER_PASSWORD:?Run make env}
+      DOCUMENT_BROKER_PASSWORD: ${DOCUMENT_BROKER_PASSWORD:?Run make env}
+      INGESTION_BROKER_PASSWORD: ${INGESTION_BROKER_PASSWORD:?Run make env}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  document-migrate:
+    build: *document-build
+    command: ["alembic", "-c", "app/alembic.ini", "upgrade", "head"]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *database
+      DB_USER: rag_documents_migrate
+      DB_PASSWORD: ${DOCUMENT_MIGRATION_PASSWORD:?Run make env}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  ingestion-migrate:
+    build: *ingestion-build
+    command: ["alembic", "-c", "app/alembic.ini", "upgrade", "head"]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *database
+      DB_USER: rag_ingestion_migrate
+      DB_PASSWORD: ${INGESTION_MIGRATION_PASSWORD:?Run make env}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  retrieval-service:
+    build:
+      <<: *backend-build
+      args: { SERVICE: retrieval-service }
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      WORKSPACE_INTERACTION_TOKEN: ${WORKSPACE_INTERACTION_TOKEN:?Run make env}
+      RETRIEVAL_INTERACTION_TOKEN: ${RETRIEVAL_INTERACTION_TOKEN:?Run make env}
+      DOCUMENT_RETRIEVAL_TOKEN: ${DOCUMENT_RETRIEVAL_TOKEN:?Run make env}
+      MODEL_EMBEDDING_TOKEN: ${MODEL_EMBEDDING_TOKEN:?Run make env}
+      INGESTION_RETRIEVAL_TOKEN: ${INGESTION_RETRIEVAL_TOKEN:?Run make env}
+    depends_on:
+      qdrant:
+        condition: service_healthy
+
+  agent-orchestrator:
+    build: &orchestration-build
+      <<: *backend-build
+      args: { SERVICE: agent-orchestrator }
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      ORCHESTRATION_ARTIFACT_TOKEN: ${ORCHESTRATION_ARTIFACT_TOKEN:?Run make env}
+      <<: *database
+      DB_USER: rag_orchestration
+      DB_PASSWORD: ${ORCHESTRATION_DB_PASSWORD:?Run make env}
+      WORKSPACE_INTERACTION_TOKEN: ${WORKSPACE_INTERACTION_TOKEN:?Run make env}
+      RETRIEVAL_INTERACTION_TOKEN: ${RETRIEVAL_INTERACTION_TOKEN:?Run make env}
+      MODEL_CHAT_TOKEN: ${MODEL_CHAT_TOKEN:?Run make env}
+      RUN_TIMEOUT_SECONDS: ${RUN_TIMEOUT_SECONDS:-85}
+      RUN_MAX_ATTEMPTS: ${RUN_MAX_ATTEMPTS:-2}
+      RUN_MAX_OUTPUT_TOKENS: ${RUN_MAX_OUTPUT_TOKENS:-800}
+      RUN_MAX_INPUT_BYTES: ${RUN_MAX_INPUT_BYTES:-14000}
+      RUN_MAX_STEPS: ${RUN_MAX_STEPS:-2}
+      RUN_MAX_COST_MICRO_USD: ${RUN_MAX_COST_MICRO_USD:-0}
+      MODEL_CHAT_INPUT_MICRO_USD_PER_1K: ${MODEL_CHAT_INPUT_MICRO_USD_PER_1K:-0}
+      MODEL_CHAT_OUTPUT_MICRO_USD_PER_1K: ${MODEL_CHAT_OUTPUT_MICRO_USD_PER_1K:-0}
+
+    depends_on:
+      orchestration-migrate:
+        condition: service_completed_successfully
+      retrieval-service:
+        condition: service_healthy
+      model-gateway:
+        condition: service_healthy
+
+  orchestration-migrate:
+    build: *orchestration-build
+    command: ["alembic", "-c", "app/alembic.ini", "upgrade", "head"]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *database
+      DB_USER: rag_orchestration_migrate
+      DB_PASSWORD: ${ORCHESTRATION_MIGRATION_PASSWORD:?Run make env}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  artifact-service:
+    build: &artifact-build
+      <<: *backend-build
+      args: { SERVICE: artifact-service }
+    environment:
+      <<: *database
+      DB_USER: rag_artifacts
+      DB_PASSWORD: ${ARTIFACT_DB_PASSWORD:?Run make env}
+      WORKSPACE_INTERACTION_TOKEN: ${WORKSPACE_INTERACTION_TOKEN:?Run make env}
+      ORCHESTRATION_ARTIFACT_TOKEN: ${ORCHESTRATION_ARTIFACT_TOKEN:?Run make env}
+
+    depends_on:
+      artifact-migrate:
+        condition: service_completed_successfully
+
+  artifact-migrate:
+    build: *artifact-build
+    command: ["alembic", "-c", "app/alembic.ini", "upgrade", "head"]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *database
+      DB_USER: rag_artifacts_migrate
+      DB_PASSWORD: ${ARTIFACT_MIGRATION_PASSWORD:?Run make env}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  model-gateway:
+    build:
+      <<: *backend-build
+      args: { SERVICE: model-gateway }
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      MODEL_ALLOW_LOCAL_HTTP: ${MODEL_ALLOW_LOCAL_HTTP:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      ADMIN_DOMAIN_TOKEN: ${ADMIN_DOMAIN_TOKEN:?Run make env}
+      MODEL_CHAT_TOKEN: ${MODEL_CHAT_TOKEN:?Run make env}
+      MODEL_CHAT_BASE_URL: ${MODEL_CHAT_BASE_URL:-}
+      MODEL_CHAT_NAME: ${MODEL_CHAT_NAME:-}
+      MODEL_CHAT_API_KEY: ${MODEL_CHAT_API_KEY:-}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-disabled}
+      MODEL_EMBEDDING_TOKEN: ${MODEL_EMBEDDING_TOKEN:?Run make env}
+      MODEL_EMBEDDING_BASE_URL: ${MODEL_EMBEDDING_BASE_URL:-}
+      MODEL_EMBEDDING_NAME: ${MODEL_EMBEDDING_NAME:-}
+      MODEL_EMBEDDING_API_KEY: ${MODEL_EMBEDDING_API_KEY:-}
+      MODEL_EMBEDDING_DIMENSIONS: ${MODEL_EMBEDDING_DIMENSIONS:-}
+      MODEL_EMBEDDING_REVISION: ${MODEL_EMBEDDING_REVISION:-1}
+
+  admin-service:
+    build:
+      <<: *backend-build
+      args: { SERVICE: admin-service }
+    environment:
+      ADMIN_DOMAIN_TOKEN: ${ADMIN_DOMAIN_TOKEN:?Run make env}
+    depends_on:
+      auth-service:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Run make env and set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?Run make env and set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run make env and set POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-23002}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-23003}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?Run make env and set RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Run make env and set RABBITMQ_DEFAULT_PASS}
+    ports:
+      - "127.0.0.1:${RABBITMQ_AMQP_PORT:-23004}:5672"
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-23005}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.2
+    ports:
+      - "127.0.0.1:${QDRANT_HTTP_PORT:-23006}:6333"
+      - "127.0.0.1:${QDRANT_GRPC_PORT:-23007}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      # The upstream runtime includes Bash. Probe HTTP readiness without adding curl to the image.
+      test:
+        - CMD
+        - bash
+        - -ec
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/6333;
+          printf 'GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3;
+          read -r response <&3;
+          [[ "$$response" == HTTP/1.*' 200 '* ]]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    build: ./infra/minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Run make env and set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Run make env and set MINIO_ROOT_PASSWORD}
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT:-23008}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-23009}:9001"
+    volumes:
+      - minio_data:/data
+
+networks:
+  document-preview:
+    internal: true
+  document-parse:
+    internal: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  qdrant_data:
+  minio_data:

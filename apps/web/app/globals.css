@@ -1,0 +1,96 @@
+:root {
+  color-scheme: light;
+  --font-body: Inter, system-ui, sans-serif;
+  --content-width: 52rem;
+  --space-page: clamp(1rem, 5vw, 3rem);
+  --canvas: #f6f7fb;
+  --surface: #fff;
+  --ink: #182237;
+  --muted: #49556a;
+  --line: #d4d9e2;
+  --accent: #244997;
+  --warning: #a02930;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--ink); font: 1rem/1.5 var(--font-body); }
+main { max-width: var(--content-width); margin-inline: auto; padding: var(--space-page); }
+h1, h2, h3, p { margin-block: 0; }
+h1 { margin-block: .75rem 1.25rem; letter-spacing: -.035em; line-height: 1.15; }
+h2 { overflow-wrap: anywhere; font-size: 1.2rem; }
+h3 { font-size: 1rem; }
+a { color: var(--accent); text-underline-offset: .2em; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+
+button, input, select { font: inherit; }
+button, .button {
+  padding: .55rem .85rem;
+  border: 1px solid var(--accent);
+  border-radius: .45rem;
+  background: var(--accent);
+  color: #fff;
+  text-decoration: none;
+  cursor: pointer;
+}
+button:disabled { opacity: .55; cursor: wait; }
+button.secondary, button.danger { border-color: var(--line); background: var(--surface); color: var(--ink); }
+button.danger, [role="alert"] { color: var(--warning); }
+
+label { display: grid; gap: .3rem; font-size: .92rem; font-weight: 600; }
+input, select {
+  width: 100%;
+  min-width: 0;
+  padding: .55rem .65rem;
+  border: 1px solid #a0aabb;
+  border-radius: .4rem;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .8rem var(--space-page);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.topbar nav, .actions, .workspace-title { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; }
+.brand { color: var(--ink); font-weight: 700; text-decoration: none; }
+.account-shell { max-width: 32rem; }
+.account-shell > p, .account-shell > .actions { margin-block: 1rem; }
+.panel { border: 1px solid var(--line); border-radius: .65rem; background: var(--surface); padding: 1.15rem; }
+.form-stack, .workspace-content, .workspace-list, .workspace, .sharing { display: grid; gap: 1rem; }
+.form-stack > button { justify-self: start; }
+.muted { color: var(--muted); font-size: .9rem; }
+.inline-form { display: flex; align-items: end; flex-wrap: wrap; gap: .75rem; }
+.inline-form > label:first-child { flex: 1 1 14rem; }
+.workspace-title { justify-content: space-between; }
+.role { text-transform: capitalize; font-size: .85rem; color: var(--muted); }
+.sharing { border-top: 1px solid var(--line); padding-top: 1rem; }
+.members { list-style: none; padding: 0; margin: 0; }
+.members li { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; padding-block: .5rem; }
+.member-id { overflow-wrap: anywhere; }
+
+.document-page { max-width: 90rem; }
+.document-layout { display: grid; grid-template-columns: minmax(11rem, 1fr) minmax(0, 2.6fr); gap: 1rem; align-items: start; }
+.document-list { list-style: none; padding: 0; margin: 0; display: grid; gap: .35rem; }
+.document-list button { text-align: left; width: 100%; overflow-wrap: anywhere; }
+.document-list button[aria-pressed="true"] { border-color: var(--accent); }
+.document-preview { min-width: 0; }
+.document-preview canvas { max-width: 100%; height: auto; border: 1px solid var(--line); margin-inline: auto; }
+.pdf-controls { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; }
+@media (max-width: 46rem) {
+  .document-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+.check-option { display: flex; align-items: baseline; gap: .5rem; }
+.check-option input { width: auto; }
+.source-excerpt { white-space: pre-line; overflow-wrap: anywhere; }
+
+.pdf-stage { position: relative; align-self: center; width: fit-content; max-width: 100%; }
+.pdf-highlight, .pdf-selection { position: absolute; }
+.pdf-highlight { background: #eac23660; pointer-events: none; }
+.pdf-selection { inset: 0; cursor: crosshair; touch-action: none; }
