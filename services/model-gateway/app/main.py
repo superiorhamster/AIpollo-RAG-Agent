@@ -1,5 +1,6 @@
 """Provider-facing embedding API. Domain services receive validated vectors only."""
 
+import asyncio
 import hashlib
 import json
 import hmac
@@ -18,6 +19,9 @@ from rag_http import ApiError, health_response, install_http, request_id, requir
 from rag_index import EmbeddingBatch, EmbeddingConfig, EmbeddingResult
 
 SERVICE = "model-gateway"
+GEMINI_CONCURRENCY = 4
+# Ingestion waits 30 seconds for the entire embedding batch.
+GEMINI_BATCH_TIMEOUT_SECONDS = 25
 
 
 def model_unavailable() -> ApiError:
@@ -109,11 +113,27 @@ async def embed(data: EmbeddingBatch, request: Request) -> EmbeddingResult:
 
     base_url = os.environ["MODEL_EMBEDDING_BASE_URL"].rstrip("/")
     gemini = urlsplit(base_url).hostname == "generativelanguage.googleapis.com"
-    batches = ([text] for text in data.texts) if gemini else (data.texts,)
-    vectors = []
-    for texts in batches:
-        vectors.extend(await fetch_embeddings(request, base_url, texts, config.dimensions, gemini))
-    return EmbeddingResult(vectors=vectors)
+    if not gemini:
+        vectors = await fetch_embeddings(request, base_url, data.texts, config.dimensions, False)
+        return EmbeddingResult(vectors=vectors)
+
+    semaphore = asyncio.Semaphore(GEMINI_CONCURRENCY)
+
+    async def singleton(text: str) -> list[list[float]]:
+        async with semaphore:
+            return await fetch_embeddings(request, base_url, [text], config.dimensions, True)
+
+    tasks = [asyncio.create_task(singleton(text)) for text in data.texts]
+    try:
+        async with asyncio.timeout(GEMINI_BATCH_TIMEOUT_SECONDS):
+            batches = await asyncio.gather(*tasks)
+        return EmbeddingResult(vectors=[vector for batch in batches for vector in batch])
+    except TimeoutError as exc:
+        raise ApiError(503, "provider_unavailable", "The embedding provider exceeded the batch deadline.") from exc
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def fetch_embeddings(
