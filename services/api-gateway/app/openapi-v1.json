@@ -6408,6 +6408,22 @@
             ],
             "title": "Error Code"
           },
+          "retryable": {
+            "type": "boolean",
+            "default": false,
+            "description": "A final Ask completion returned HTTP 503 from Model Gateway."
+          },
+          "objective": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Objective"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The saved Ask objective, including the original document selection."
+          },
           "query": {
             "type": "string",
             "title": "Query"

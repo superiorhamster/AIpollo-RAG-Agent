@@ -81,6 +81,26 @@ class Claim(BaseModel):
 class GeneratedAnswer(BaseModel):
     claims: list[Claim] = Field(max_length=12)
 
+
+class AskClaim(Claim):
+    evidence: list[UUID] = Field(max_length=6)
+    source: Literal["document", "conversation"] = "document"
+
+    @model_validator(mode="after")
+    def validate_provenance(self):
+        if bool(self.evidence) != (self.source == "document"):
+            raise ValueError("Only document claims require evidence, and chat claims must have none")
+        return self
+
+
+class GeneratedAskAnswer(BaseModel):
+    claims: list[AskClaim] = Field(max_length=12)
+
+
+class SearchRewrite(BaseModel, extra="forbid"):
+    query: Query
+
+
 class Citation(Chunk):
     document_id: UUID
     chunk_id: UUID
@@ -91,6 +111,7 @@ class CitedClaim(BaseModel):
     text: str
     fields: dict[FieldText, FieldText] = Field(default_factory=dict)
     citations: list[Citation]
+    source: Literal["document", "conversation"] = "document"
 
 
 class Answer(BaseModel):
@@ -110,6 +131,8 @@ class RunView(BaseModel):
     step: str | None
     result: Answer | None
     error_code: str | None
+    retryable: bool = False
+    objective: Objective | None = None
     query: str
     created_at: datetime
     updated_at: datetime

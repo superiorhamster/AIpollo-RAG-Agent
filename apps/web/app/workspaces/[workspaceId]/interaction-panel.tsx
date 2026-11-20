@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
+import { RotateCw } from 'lucide-react'
 import { DesignIcon } from '../../components/aipollo'
 import { useWorkspaceLanguage } from '../../components/workspace-language'
 import { api, errorMessage } from '../../lib/api'
@@ -51,7 +52,12 @@ type Plan = {
   expected_outputs: string[]
 }
 type Citation = CitationTarget & { chunk_id: string; name: string }
-type Result = { kind?: string; claims: { text: string; fields?: Record<string, string>; citations: Citation[] }[]; insufficient_evidence: boolean }
+type Result = { kind?: string; claims: {
+  text: string
+  fields?: Record<string, string>
+  citations: Citation[]
+  source?: 'document' | 'conversation'
+}[]; insufficient_evidence: boolean }
 type Run = {
   run_id: string
   conversation_id: string | null
@@ -61,6 +67,8 @@ type Run = {
   step: 'retrieve' | 'compose' | null
   result: Result | null
   error_code: string | null
+  retryable?: boolean
+  objective?: Objective | null
   query?: string
 }
 type Conversation = { conversation_id: string; name: string }
@@ -93,8 +101,13 @@ export function InteractionPanel({
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [retries, setRetries] = useState<Record<string, Run>>({})
+  const [retryErrors, setRetryErrors] = useState<Record<string, string>>({})
+  const [retryingId, setRetryingId] = useState<string>()
+  const retryTarget = useRef<{ id: string; previous: Run } | null>(null)
+  const retryRunIds = useRef(new Map<string, string>())
   const queryField = useRef<HTMLTextAreaElement>(null)
-  const locked = busy || activeId !== undefined
+  const locked = busy || activeId !== undefined || retryingId !== undefined
 
   useEffect(() => onSourcesLock(locked), [locked, onSourcesLock])
 
@@ -113,29 +126,47 @@ export function InteractionPanel({
 
   useEffect(() => {
     if (!activeId) return
+    const target = retryTarget.current
     const events = new EventSource(base + '/runs/' + activeId + '/events')
-    events.onerror = () => {
-      void api<Run>(base + '/runs/' + activeId).then(current => {
+    let listening = true
+    function update(current: Run) {
+      if (!listening) return
+      if (target) {
+        const id = target.id
+        setRetries(prior => ({ ...prior, [id]: { ...current, query: current.query ?? target.previous.query } }))
+      } else {
         setRun(prior => ({ ...current, query: current.query ?? prior?.query }))
-        if (current.status !== 'queued' && current.status !== 'running') {
-          events.close()
-          setActiveId(undefined)
-        }
-      }).catch(failure => {
-        events.close()
-        setActiveId(undefined)
-        setError(errorMessage(failure))
-      })
-    }
-    events.onmessage = (event: MessageEvent<string>) => {
-      const current = JSON.parse(event.data) as Run
-      setRun(prior => ({ ...current, query: current.query ?? prior?.query }))
+      }
       if (current.status !== 'queued' && current.status !== 'running') {
+        listening = false
         events.close()
         setActiveId(undefined)
+        if (target) {
+          retryTarget.current = null
+          setRetryingId(undefined)
+        }
       }
     }
-    return () => events.close()
+    events.onerror = () => {
+      void api<Run>(base + '/runs/' + activeId).then(update).catch(failure => {
+        if (!listening) return
+        events.close()
+        setActiveId(undefined)
+        if (target) {
+          setRetries(prior => ({ ...prior, [target.id]: target.previous }))
+          setRetryErrors(prior => ({ ...prior, [target.id]: errorMessage(failure) }))
+          retryTarget.current = null
+          setRetryingId(undefined)
+        } else {
+          setError(errorMessage(failure))
+        }
+      })
+    }
+    events.onmessage = (event: MessageEvent<string>) => update(JSON.parse(event.data) as Run)
+    return () => {
+      listening = false
+      events.close()
+    }
   }, [activeId, base])
 
   async function perform(operation: () => Promise<void>) {
@@ -157,6 +188,32 @@ export function InteractionPanel({
     setRun(fresh)
     setConversation(fresh.conversation_id ?? undefined)
     setActiveId(fresh.run_id)
+  }
+
+  function submitRun(mode: 'ASK' | 'AGENT', objective: Objective, conversationId?: string) {
+    return api<Run>(base + '/runs', 'POST', {
+      mode, objective, conversation_id: mode === 'ASK' ? conversationId : undefined,
+    }, crypto.randomUUID())
+  }
+
+  async function retry(originalId: string, failed: Run) {
+    if (locked || retryTarget.current || !failed.retryable || !failed.objective || !failed.conversation_id) return
+    retryTarget.current = { id: originalId, previous: failed }
+    setRetryingId(originalId)
+    setRetryErrors(prior => ({ ...prior, [originalId]: '' }))
+    try {
+      const fresh = await submitRun('ASK', failed.objective, failed.conversation_id)
+      retryRunIds.current.set(fresh.run_id, originalId)
+      setRetries(prior => ({ ...prior, [originalId]: { ...fresh, query: fresh.query ?? failed.query } }))
+      if (fresh.status === 'queued' || fresh.status === 'running') {
+        setActiveId(fresh.run_id)
+        return
+      }
+    } catch (failure) {
+      setRetryErrors(prior => ({ ...prior, [originalId]: errorMessage(failure) }))
+    }
+    retryTarget.current = null
+    setRetryingId(undefined)
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -187,11 +244,7 @@ export function InteractionPanel({
         setPlan(created)
         if (queryField.current && queryField.current === element.elements.namedItem('query')) queryField.current.value = ''
       } else {
-        const fresh = await api<Run>(base + '/runs', 'POST', {
-          mode,
-          objective: input,
-          conversation_id: mode === 'ASK' ? conversation : undefined,
-        }, crypto.randomUUID())
+        const fresh = await submitRun(mode, input, conversation)
         begin({ ...fresh, query: input.query })
         if (queryField.current && queryField.current === element.elements.namedItem('query')) queryField.current.value = ''
       }
@@ -219,14 +272,26 @@ export function InteractionPanel({
     if (!activeId) return
     void perform(async () => {
       const stopped = await api<Run>(base + '/runs/' + activeId + '/cancel', 'POST')
-      setRun(prior => ({ ...stopped, query: stopped.query ?? prior?.query }))
+      const target = retryTarget.current
+      if (target) {
+        setRetries(prior => ({ ...prior, [target.id]: { ...stopped, query: stopped.query ?? target.previous.query } }))
+        retryTarget.current = null
+        setRetryingId(undefined)
+      } else {
+        setRun(prior => ({ ...stopped, query: stopped.query ?? prior?.query }))
+      }
       setActiveId(undefined)
     })
   }
 
   function openConversation(item: Conversation) {
     void perform(async () => {
-      setHistory(await api<Run[]>(base + '/conversations/' + item.conversation_id))
+      const turns = await api<Run[]>(base + '/conversations/' + item.conversation_id)
+      const visibleIds = new Set(turns.map(turn => turn.run_id))
+      setHistory(turns.filter(turn => {
+        const originalId = retryRunIds.current.get(turn.run_id)
+        return !originalId || !visibleIds.has(originalId)
+      }))
       setConversation(item.conversation_id)
       setRun(undefined)
       setMode('ASK')
@@ -242,7 +307,9 @@ export function InteractionPanel({
     setMode('ASK')
   }
 
-  function answers(item: Run) {
+  function answers(original: Run) {
+    const item = retries[original.run_id] ?? original
+    const retryPending = retryingId === original.run_id
     const active = item.status === 'running' || item.status === 'queued'
     const composing = item.step === 'compose'
     const searching = item.step === 'retrieve'
@@ -251,7 +318,7 @@ export function InteractionPanel({
       { label: 'Compose grounded response', done: false, running: composing },
     ]
     return (
-      <article key={item.run_id} className="aipollo-turn">
+      <article key={original.run_id} className="aipollo-turn">
         {item.query && <p className="chat-query">{item.query}</p>}
         {active && <section className="run-card" aria-label="Execution progress">
           <header className="aipollo-section-heading">
@@ -273,7 +340,16 @@ export function InteractionPanel({
           </ol>
         </section>}
         {item.status === 'cancelled' && <p role="status">Run cancelled.</p>}
-        {item.error_code && <p role="alert"><DesignIcon name="error" /> Run failed. {item.error_code.replaceAll('_', ' ')}.</p>}
+        {(item.error_code || retryPending) && <div className="ask-run-error">
+          <p role={retryPending ? 'status' : 'alert'}><DesignIcon name="error" /> {retryPending
+            ? 'Retrying…' : `Run failed. ${item.error_code?.replaceAll('_', ' ')}.`}</p>
+          {(retryPending || (item.interaction === 'ASK' && item.retryable && item.objective && item.conversation_id)) &&
+            <button type="button" className="secondary sm ask-retry" aria-label="Retry" title="Retry"
+              aria-busy={retryPending} disabled={locked} onClick={() => void retry(original.run_id, item)}>
+              <RotateCw aria-hidden="true" size={16} />
+            </button>}
+        </div>}
+        {retryErrors[original.run_id] && item.error_code && <p role="alert">{retryErrors[original.run_id]}</p>}
         {item.result?.insufficient_evidence && <div className="approval-notice" role="status">
           <DesignIcon name="warning" /><div><strong>Not enough evidence in the selected sources</strong>
             <p>Choose more sources and try again.</p></div>
@@ -283,13 +359,15 @@ export function InteractionPanel({
           {item.result.claims.map((claim, index) => (
             <div key={index} className="claim-row">
               <div className="claim-copy"><GeneratedContent text={claim.text} fields={claim.fields} kind={item.result?.kind} /></div>
-              <div className="claim-citations">
+              {claim.source === 'conversation' ? <span className="badge badge-neutral">
+                {text('From this chat', 'Từ cuộc trò chuyện này')}
+              </span> : <div className="claim-citations">
                 {claim.citations.filter(citation => documents.some(doc => doc.document_id === citation.document_id))
                   .map(citation => <button type="button" className="citation-pill" key={citation.chunk_id}
                     onClick={() => onCitation(citation)}>
                     <DesignIcon name="citation" /><span>{citation.name}, page {citation.page}</span>
                   </button>)}
-              </div>
+              </div>}
             </div>
           ))}
           <div className="response-actions">
@@ -301,8 +379,10 @@ export function InteractionPanel({
             void navigator.clipboard.writeText(content).then(() => setCopied(item.run_id))
               .catch(failure => setError(errorMessage(failure)))
           }}>{copied === item.run_id ? 'Copied' : 'Copy'}</button>
-          {canPublish && <details className="save-response">
+          {canPublish && item.result.claims.some(claim => claim.citations.length > 0) && <details className="save-response">
             <summary>{published === item.run_id ? 'Artifact saved' : 'Save as artifact'}</summary>
+            {item.result.claims.some(claim => claim.source === 'conversation') &&
+              <p>{text('Only document-supported claims are saved.', 'Chỉ lưu các nội dung có nguồn tài liệu.')}</p>}
             <form className="inline-form" onSubmit={event => {
               event.preventDefault()
               const name = String(new FormData(event.currentTarget).get('name')).trim()

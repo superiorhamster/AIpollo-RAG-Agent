@@ -30,6 +30,8 @@ run_check() {
 }
 
 "${compose[@]}" up --build --wait --wait-timeout 180 web
+"${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \
+  agent-orchestrator python /tests/phase05/history_ask.py
 read -r workspace_id pdf_id docx_id <<< "$(run_check seed)"
 MODEL_PROVIDER=fixture "${compose[@]}" up --no-deps --wait --wait-timeout 60 model-gateway
 "${compose[@]}" run --rm --no-deps -T -v "$PWD/tests:/tests:ro" \

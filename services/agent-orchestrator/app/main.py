@@ -19,14 +19,18 @@ from rag_db import database_ready, install_database_errors, open_database
 from rag_http import ACCESS_COOKIE, ACCESS_FORMAT, ApiError, health_response, install_http, request_id, require_service, unauthorized, unavailable
 
 from .types import Conversation, EditPlan, Objective, PlanView, RunView, StartRun, Version
-from .worker import Worker, authorize
+from .worker import ASK_COMPLETION_UNAVAILABLE, Worker, authorize
 
 SERVICE = "agent-orchestrator"
 BASE = "/v1/workspaces/{workspace_id}"
 Key = Annotated[UUID, Header(alias="Idempotency-Key")]
 RUN_FIELDS = (
     "run_id, interaction, conversation_id, plan_id, plan_version, "
-    "status, step, result, error_code, request_id, created_at, updated_at, input->>'query' AS query"
+    "status, step, result, "
+    f"CASE WHEN error_code = '{ASK_COMPLETION_UNAVAILABLE}' THEN 'interaction_unavailable' ELSE error_code END AS error_code, "
+    f"COALESCE(error_code = '{ASK_COMPLETION_UNAVAILABLE}', false) AS retryable, "
+    "CASE WHEN interaction = 'ASK' THEN input END AS objective, "
+    "request_id, created_at, updated_at, input->>'query' AS query"
 )
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
@@ -373,4 +377,9 @@ async def artifact_run(workspace_id: UUID, user_id: UUID, run_id: UUID, request:
         run = found.mappings().one_or_none()
         if run is None:
             raise missing()
-        return dict(run)
+        payload = dict(run)
+        result = payload["result"]
+        if result:
+            claims = [claim for claim in result["claims"] if claim.get("source") != "conversation"]
+            payload["result"] = {**result, "claims": claims, "insufficient_evidence": not claims}
+        return payload

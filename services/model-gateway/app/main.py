@@ -1,12 +1,15 @@
 """Provider-facing embedding API. Domain services receive validated vectors only."""
 
+import asyncio
 import hashlib
 import json
 import hmac
+import logging
 import math
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from time import perf_counter
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -18,6 +21,7 @@ from rag_http import ApiError, health_response, install_http, request_id, requir
 from rag_index import EmbeddingBatch, EmbeddingConfig, EmbeddingResult
 
 SERVICE = "model-gateway"
+LOG = logging.getLogger("uvicorn.error")
 
 
 def model_unavailable() -> ApiError:
@@ -161,6 +165,7 @@ class Message(BaseModel):
 class CompletionInput(BaseModel):
     messages: list[Message] = Field(min_length=1, max_length=8)
     max_tokens: int = Field(default=800, ge=32, le=2048)
+    retry_on_unavailable: bool = False
 
 
 class CompletionOutput(BaseModel):
@@ -174,7 +179,11 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
     require_service(request, "X-Model-Service-Token", os.environ["MODEL_CHAT_TOKEN"])
     if os.environ.get("MODEL_PROVIDER") == "fixture":
         payload = json.loads(data.messages[-1].content)
+        if "question" in payload and "history" in payload and "evidence" not in payload:
+            return CompletionOutput(text=json.dumps({"query": payload["question"]}))
         sources = payload["evidence"]
+        if not sources:
+            return CompletionOutput(text=json.dumps({"claims": []}))
         first = sources[0]
         fields = {name: first["text"][:600] for name in payload.get("fields", [])}
         return CompletionOutput(text=json.dumps({"claims": [{
@@ -186,20 +195,29 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
     if (os.environ.get("MODEL_PROVIDER") != "openai-compatible" or not model or not key
             or not valid_provider_url(base)):
         raise ApiError(503, "chat_model_unavailable", "The chat model is not configured.")
+    started = perf_counter()
+    response = None
+    headers = {"Authorization": "Bearer " + key, "X-Request-ID": request_id(request)}
+    body = {"model": model, "max_tokens": data.max_tokens, "messages": [item.model_dump() for item in data.messages]}
     try:
-        response = await app.state.client.post(
-            base + "/chat/completions",
-            headers={"Authorization": "Bearer " + key, "X-Request-ID": request_id(request)},
-            json={"model": model, "max_tokens": data.max_tokens,
-                  "messages": [item.model_dump() for item in data.messages]},
-        )
+        # The Ask worker waits up to 30 seconds. Bound both attempts together.
+        async with asyncio.timeout(28 if data.retry_on_unavailable else None):
+            response = await app.state.client.post(base + "/chat/completions", headers=headers, json=body)
+            if data.retry_on_unavailable and response.status_code == 503:
+                LOG.info("Chat completion retry request_id=%s upstream_status=503", request_id(request))
+                await asyncio.sleep(0.25)
+                response = None
+                response = await app.state.client.post(base + "/chat/completions", headers=headers, json=body)
         response.raise_for_status()
         result = response.json()
         usage = result.get("usage") or {}
         return CompletionOutput(text=result["choices"][0]["message"]["content"],
                                 input_tokens=usage.get("prompt_tokens"),
                                 output_tokens=usage.get("completion_tokens"))
-    except (httpx.HTTPError, ValueError, KeyError, IndexError, ValidationError) as exc:
+    except (httpx.HTTPError, TimeoutError, ValueError, KeyError, IndexError, ValidationError) as exc:
+        LOG.warning("Chat completion failure request_id=%s error=%s elapsed_ms=%.2f upstream_status=%s",
+                    request_id(request), type(exc).__name__, (perf_counter() - started) * 1000,
+                    response.status_code if response is not None else None)
         raise ApiError(503, "chat_provider_unavailable", "The chat provider could not complete the request.") from exc
 
 
