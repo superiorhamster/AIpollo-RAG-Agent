@@ -1,5 +1,6 @@
 """Exercise the embedding route against mocked upstream responses."""
 
+import asyncio
 import json
 import os
 import unittest
@@ -63,6 +64,83 @@ class Embeddings(unittest.IsolatedAsyncioTestCase):
             with self.subTest(row_count=len(rows), index=rows[0].get("index") if rows else None):
                 response = await self.embed(GEMINI, ["text"], lambda _: httpx.Response(200, json={"data": rows}))
                 self.assertEqual(response.status_code, 502)
+
+    async def test_full_gemini_batch_is_bounded_and_preserves_input_order(self):
+        active = 0
+        peak = 0
+        completed = []
+        texts = [str(index) for index in range(16)]
+
+        async def upstream(request):
+            nonlocal active, peak
+            index = int(json.loads(request.content)["input"][0])
+            active += 1
+            peak = max(peak, active)
+            try:
+                # Force requests to finish out of input order.
+                await asyncio.sleep(0.08 if index % 4 == 0 else 0.02)
+                completed.append(index)
+                return httpx.Response(200, json={"data": [{"embedding": [index + 1] * 3072}]})
+            finally:
+                active -= 1
+
+        with patch("app.main.GEMINI_BATCH_TIMEOUT_SECONDS", 0.8):
+            response = await self.embed(GEMINI, texts, upstream)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["vectors"], [[index + 1] * 3072 for index in range(16)])
+        self.assertEqual(peak, 4)
+        self.assertNotEqual(completed, list(range(16)))
+        self.assertEqual(active, 0)
+
+    async def test_gemini_deadline_cancels_inflight_and_queued_requests(self):
+        active = 0
+        started = []
+        cancelled = []
+
+        async def upstream(request):
+            nonlocal active
+            text = json.loads(request.content)["input"][0]
+            started.append(text)
+            active += 1
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.append(text)
+                raise
+            finally:
+                active -= 1
+
+        with patch("app.main.GEMINI_BATCH_TIMEOUT_SECONDS", 0.05):
+            response = await self.embed(GEMINI, [str(index) for index in range(16)], upstream)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["code"], "provider_unavailable")
+        self.assertEqual(len(started), 4)
+        self.assertCountEqual(cancelled, started)
+        self.assertEqual(active, 0)
+
+    async def test_gemini_failure_cancels_other_requests(self):
+        active = 0
+        started = []
+
+        async def upstream(request):
+            nonlocal active
+            text = json.loads(request.content)["input"][0]
+            started.append(text)
+            active += 1
+            try:
+                if text == "0":
+                    await asyncio.sleep(0.02)
+                    return httpx.Response(429)
+                await asyncio.Event().wait()
+            finally:
+                active -= 1
+
+        async with asyncio.timeout(1):
+            response = await self.embed(GEMINI, [str(index) for index in range(16)], upstream)
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("vectors", response.json())
+        self.assertLess(len(started), 16)
+        self.assertEqual(active, 0)
 
     async def test_other_providers_still_require_indexed_batches(self):
         def upstream(request):

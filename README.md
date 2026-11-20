@@ -77,9 +77,9 @@ Set MODEL_CHAT_BASE_URL, MODEL_CHAT_NAME, and MODEL_CHAT_API_KEY for the compati
 
 ### Gemini embeddings return 502 `invalid_embedding`
 
-Gemini's OpenAI-compatible endpoint can return HTTP 200 with a valid embedding row that omits `index`. The [Model Gateway adapter](services/model-gateway/app/main.py) sends each input separately to `generativelanguage.googleapis.com` and assembles the vectors in input order. Each Gemini response must contain exactly one row. Its index may be omitted or set to the integer `0`. Dimension and nonzero-vector checks still apply. Other hosts use the existing indexed batch path.
+Gemini's OpenAI-compatible endpoint can return HTTP 200 with a valid embedding row that omits `index`. The [Model Gateway adapter](services/model-gateway/app/main.py) sends each input separately to `generativelanguage.googleapis.com`, with up to four concurrent requests per batch, and assembles the vectors in input order. The entire Gemini batch has a 25-second deadline, within Ingestion's 30-second read timeout. A timeout or failed response cancels outstanding requests and returns an error for the whole batch. Each Gemini response must contain exactly one row. Its index may be omitted or set to the integer `0`. Dimension and nonzero-vector checks still apply. Other hosts use the existing indexed batch path.
 
-From the repository root, rebuild only Model Gateway and run the [mocked regression tests](tests/model-gateway/embeddings.py). The tests cover omitted indexes, multiple inputs, result ordering, and response validation. The following commands use Bash, as does the Makefile.
+From the repository root, rebuild only Model Gateway and run the [mocked regression tests](tests/model-gateway/embeddings.py). The tests cover omitted indexes, full 16-input batches, concurrency limits, out-of-order completion, deadline cancellation, upstream failure, and response validation. CI runs these tests in Model Gateway. The following commands use Bash, as does the Makefile.
 
 ```bash
 docker compose --env-file .env -f compose.dev.yaml up -d --no-deps --build --wait model-gateway
