@@ -75,6 +75,20 @@ For a local OpenAI-compatible endpoint on the Docker host, use http://host.docke
 
 Set MODEL_CHAT_BASE_URL, MODEL_CHAT_NAME, and MODEL_CHAT_API_KEY for the compatible chat endpoint. In **Chats**, choose sources in the sidebar and select Ask, Plan, or Agent in the composer. On a narrow screen, select sources directly in the composer. Accepting a plan saves approval for its current version. Use **Run accepted plan** to start it. Edit or regenerate to draft a new version. Only you can access your conversations, plans, and runs.
 
+### Gemini embeddings return 502 `invalid_embedding`
+
+Gemini's OpenAI-compatible endpoint can return HTTP 200 with a valid embedding row that omits `index`. The [Model Gateway adapter](services/model-gateway/app/main.py) sends each input separately to `generativelanguage.googleapis.com` and assembles the vectors in input order. Each Gemini response must contain exactly one row. Its index may be omitted or set to the integer `0`. Dimension and nonzero-vector checks still apply. Other hosts use the existing indexed batch path.
+
+From the repository root, rebuild only Model Gateway and run the [mocked regression tests](tests/model-gateway/embeddings.py). The tests cover omitted indexes, multiple inputs, result ordering, and response validation. The following commands use Bash, as does the Makefile.
+
+```bash
+docker compose --env-file .env -f compose.dev.yaml up -d --no-deps --build --wait model-gateway
+docker compose --env-file .env -f compose.dev.yaml exec -T model-gateway python - < tests/model-gateway/embeddings.py
+make verify-provider
+```
+
+The adapter fix requires no `.env` changes. The rebuild uses the current configuration, so queued indexing can resume and send document passages to the configured embedding endpoint. `make verify-provider` sends synthetic data to the configured embedding and chat endpoints. On the local Gemini run after the fix, the embedding check passed with a 3072-dimensional vector. The chat response separately failed JSON parsing with an unterminated string.
+
 ## Academic work and administration
 
 The workspace assistant can generate cited learning, research and writing outputs. Owner and Editor can save an answer as a shared artifact. Search titles or topics with Crossref from **References**, save selected records with tags, and export BibTeX. PDFs support personal page notes and highlights. Shared artifacts export as Markdown or DOCX.

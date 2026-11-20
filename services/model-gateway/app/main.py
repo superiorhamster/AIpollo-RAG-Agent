@@ -107,12 +107,24 @@ async def embed(data: EmbeddingBatch, request: Request) -> EmbeddingResult:
     if os.environ.get("MODEL_PROVIDER") == "fixture":
         return EmbeddingResult(vectors=[fixture_vector(item, config.dimensions) for item in data.texts])
 
+    base_url = os.environ["MODEL_EMBEDDING_BASE_URL"].rstrip("/")
+    gemini = urlsplit(base_url).hostname == "generativelanguage.googleapis.com"
+    batches = ([text] for text in data.texts) if gemini else (data.texts,)
+    vectors = []
+    for texts in batches:
+        vectors.extend(await fetch_embeddings(request, base_url, texts, config.dimensions, gemini))
+    return EmbeddingResult(vectors=vectors)
+
+
+async def fetch_embeddings(
+    request: Request, base_url: str, texts: list[str], dimensions: int, gemini: bool,
+) -> list[list[float]]:
     try:
         response = await app.state.client.post(
-            os.environ["MODEL_EMBEDDING_BASE_URL"].rstrip("/") + "/embeddings",
+            base_url + "/embeddings",
             headers={"Authorization": "Bearer " + os.environ["MODEL_EMBEDDING_API_KEY"],
                      "X-Request-ID": request_id(request)},
-            json={"model": os.environ["MODEL_EMBEDDING_NAME"], "input": data.texts},
+            json={"model": os.environ["MODEL_EMBEDDING_NAME"], "input": texts},
         )
     except httpx.HTTPError as exc:
         raise ApiError(503, "provider_unavailable", "The embedding provider could not be reached.") from exc
@@ -121,15 +133,24 @@ async def embed(data: EmbeddingBatch, request: Request) -> EmbeddingResult:
     if response.status_code != 200:
         raise ApiError(503, "provider_unavailable", "The embedding provider rejected the request.")
     try:
-        rows = sorted(response.json()["data"], key=lambda item: item["index"])
-        if [row["index"] for row in rows] != list(range(len(data.texts))):
-            raise ValueError("Invalid embedding batch order")
+        rows = response.json()["data"]
+        if gemini:
+            # Each request has one input, so an omitted index is unambiguous.
+            if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+                raise ValueError("Expected one Gemini embedding row")
+            index = rows[0].get("index", 0)
+            if type(index) is not int or index != 0:
+                raise ValueError("Invalid Gemini embedding index")
+        else:
+            rows = sorted(rows, key=lambda item: item["index"])
+            if [row["index"] for row in rows] != list(range(len(texts))):
+                raise ValueError("Invalid embedding batch order")
         result = EmbeddingResult(vectors=[row["embedding"] for row in rows])
-        if any(len(vector) != config.dimensions or not any(vector) for vector in result.vectors):
+        if any(len(vector) != dimensions or not any(vector) for vector in result.vectors):
             raise ValueError("Invalid embedding dimensions or zero vector")
     except (ValueError, KeyError, TypeError, ValidationError) as exc:
         raise ApiError(502, "invalid_embedding", "The provider returned invalid embeddings.") from exc
-    return result
+    return result.vectors
 
 
 class Message(BaseModel):
