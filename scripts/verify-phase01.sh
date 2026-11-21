@@ -11,6 +11,8 @@ setup_script="$PWD/scripts/setup-env.sh"
 
 # Give the test project independent data and ephemeral host ports.
 export COMPOSE_PROJECT_NAME="rag-phase01-test-$$-$RANDOM"
+artifact_dir="$PWD/test-results/$COMPOSE_PROJECT_NAME"
+mkdir -p "$artifact_dir"
 export WEB_ORIGIN=http://127.0.0.1:3000 WEB_PORT=0 API_GATEWAY_PORT=0 POSTGRES_PORT=0 REDIS_PORT=0
 export MODEL_PROVIDER=disabled QDRANT_HTTP_PORT=0 QDRANT_GRPC_PORT=0
 export RABBITMQ_AMQP_PORT=0 RABBITMQ_MANAGEMENT_PORT=0 MINIO_API_PORT=0 MINIO_CONSOLE_PORT=0
@@ -24,6 +26,8 @@ compose=(docker compose --env-file "$test_dir/.env" -f compose.dev.yaml)
 cleanup() {
   result=$?
   trap - EXIT
+  docker cp "$COMPOSE_PROJECT_NAME-browser:/tests/test-results/." "$artifact_dir" >/dev/null 2>&1 || true
+  docker rm "$COMPOSE_PROJECT_NAME-browser" >/dev/null 2>&1 || true
   if ((result != 0)); then
     "${compose[@]}" logs --tail=60 >&2 || true
   fi
@@ -38,11 +42,12 @@ trap cleanup EXIT
 "${compose[@]}" run --rm --no-deps db-init
 "${compose[@]}" run --rm --no-deps --build auth-migrate alembic -c app/alembic.ini upgrade identity_001
 "${compose[@]}" run --rm -T --no-deps auth-migrate python - < tests/phase01/legacy-session.py
-"${compose[@]}" up --build --wait --wait-timeout 120 web
+"${compose[@]}" up --build --wait --wait-timeout "${VERIFY_WAIT_TIMEOUT:-300}" web
 "${compose[@]}" exec -T auth-service python - < tests/phase01/jwt-claims.py
 read -r admin_id PHASE01_PROMOTED_ACCESS <<< "$("${compose[@]}" exec -T -e WEB_ORIGIN workspace-service python - --seed-admin < tests/phase01/api.py)"
 export PHASE01_PROMOTED_ACCESS
 "${compose[@]}" exec -T auth-service python -m app.promote_admin "$admin_id"
 "${compose[@]}" exec -T -e WEB_ORIGIN -e PHASE01_TEST_DB_USER -e PHASE01_TEST_DB_PASSWORD -e PHASE01_PROMOTED_ACCESS workspace-service \
   python - < tests/phase01/api.py
-"${compose[@]}" --profile phase01-test run --rm --build phase01-browser-tests
+"${compose[@]}" --profile phase01-test run --no-deps --build \
+  --name "$COMPOSE_PROJECT_NAME-browser" phase01-browser-tests

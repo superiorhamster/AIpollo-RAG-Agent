@@ -21,6 +21,8 @@ jobs:
           make bootstrap
       - name: Verify embedding provider adapters
         run: docker compose --env-file .env -f compose.dev.yaml exec -T model-gateway python - < tests/model-gateway/embeddings.py
+      - name: Verify completion retries
+        run: docker compose --env-file .env -f compose.dev.yaml exec -T model-gateway python - < tests/model-gateway/completions.py
       - name: Check host entry points
         run: |
           web=$(docker compose --env-file .env -f compose.dev.yaml port web 3000)

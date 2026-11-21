@@ -24,7 +24,7 @@ ARTIFACTS = Path(os.environ.get("DOCLING_ARTIFACTS_PATH", "/opt/docling"))
 converter = DocumentConverter(
     allowed_formats=[InputFormat.PDF],
     format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=PdfPipelineOptions(
-        artifacts_path=ARTIFACTS, doc_timeout=110, do_ocr=False, enable_remote_services=False,
+        artifacts_path=ARTIFACTS, document_timeout=110, do_ocr=False, enable_remote_services=False,
     ))},
 )
 app = FastAPI(title=SERVICE, docs_url=None, redoc_url=None, openapi_url=None)

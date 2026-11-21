@@ -261,6 +261,11 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     init: true
+    healthcheck:
+      start_period: 60s
+      interval: 10s
+      timeout: 5s
+      retries: 15
 
   document-infra-init:
     build: *document-build
@@ -416,6 +421,7 @@ services:
       MODEL_EMBEDDING_API_KEY: ${MODEL_EMBEDDING_API_KEY:-}
       MODEL_EMBEDDING_DIMENSIONS: ${MODEL_EMBEDDING_DIMENSIONS:-}
       MODEL_EMBEDDING_REVISION: ${MODEL_EMBEDDING_REVISION:-1}
+      MODEL_EMBEDDING_PROTOCOL: ${MODEL_EMBEDDING_PROTOCOL:-openai}
 
   admin-service:
     build:
@@ -466,9 +472,11 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      # Run as the broker user: a root CLI probe can create .erlang.cookie before
+      # the server on an empty volume, leaving the broker unable to read it.
+      test: ["CMD", "su-exec", "rabbitmq", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 10s
-      timeout: 5s
+      timeout: 15s
       retries: 15
 
   qdrant:

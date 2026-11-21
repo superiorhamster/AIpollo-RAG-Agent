@@ -1308,6 +1308,13 @@ button.citation-pill {
   white-space: normal;
 }
 button.citation-pill:hover:not(:disabled), button.citation-pill[aria-pressed="true"] { background: var(--accent-subtle); color: var(--accent-hover); outline: 1px solid var(--accent); }
+.ask-run-error { display: flex; align-items: center; gap: 8px; }
+.ask-run-error p { margin: 0; }
+.ask-retry { display: inline-grid; place-items: center; width: 30px; height: 30px; min-height: 30px; padding: 0; border-radius: 50%; }
+@keyframes ask-retry-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: no-preference) {
+  .ask-retry[aria-busy="true"] svg { animation: ask-retry-spin 1.4s linear infinite; }
+}
 .save-response summary, .composer-mobile-sources summary { color: var(--accent-hover); font-weight: 600; cursor: pointer; }
 .save-response form { margin-top: 8px; }
 .response-actions { display: flex; align-items: flex-start; gap: 8px; }

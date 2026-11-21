@@ -1,11 +1,13 @@
 SHELL := /usr/bin/env bash
-COMPOSE := docker compose --env-file .env -f compose.dev.yaml
+COMPOSE_FILES ?= compose.dev.yaml
+export COMPOSE_FILES
+COMPOSE := docker compose --env-file .env $(foreach file,$(COMPOSE_FILES),-f $(file))
 INFRA_SERVICES := postgres redis rabbitmq qdrant minio
 WAIT_TIMEOUT ?= 180
 PRODUCTION_ENV ?= .env.production
 PRODUCTION_COMPOSE := docker compose --env-file "$(PRODUCTION_ENV)" -f compose.dev.yaml -f compose.prod.yaml
 
-.PHONY: check env bootstrap compose-check up ps logs down verify verify-app verify-phase01 verify-phase02 verify-phase03 verify-provider promote-admin \
+.PHONY: check env bootstrap compose-check up ps logs down verify verify-app verify-phase01 verify-phase02 verify-phase03 verify-provider verify-embedding eval-embedding reindex-embeddings promote-admin \
         infra-up infra-down infra-ps infra-logs verify-infra clean-infra
 
 check:
@@ -49,6 +51,15 @@ verify-phase03: env
 
 verify-provider:
 	$(COMPOSE) exec -T model-gateway python - < scripts/verify-provider.py
+
+verify-embedding:
+	$(COMPOSE) exec -T model-gateway python - < scripts/verify-embedding.py
+
+eval-embedding:
+	$(COMPOSE) run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$(CURDIR)/tests/eval:/eval:ro" model-gateway python /eval/embedding_provider.py
+
+reindex-embeddings:
+	$(COMPOSE) exec -T ingestion-service python -m app.reindex $(if $(filter 1,$(APPLY)),--apply,) $(if $(WORKSPACE_ID),--workspace "$(WORKSPACE_ID)",)
 
 promote-admin:
 	@if ! [[ "$$USER_ID" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$$ ]]; then echo 'Usage: make promote-admin USER_ID=<uuid>' >&2; exit 2; fi

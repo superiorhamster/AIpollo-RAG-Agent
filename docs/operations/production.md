@@ -29,7 +29,7 @@ Inspect a restored account, workspace, PDF page and indexed passage and record t
 
 ## Replace the embedding model
 
-Restore a backup into a separate Compose project. Configure the new compatible embedding model and run python -m app.reindex inside its Ingestion container. Wait for all eligible sources to finish and run the retrieval evaluation and citation checks with the new model. Keep serving from the original project while you validate the new index. Plan cutover during a maintenance window and include any uploads or changes made after the rehearsal snapshot.
+Restore a backup into a separate Compose project. Configure the new compatible embedding model and start Model Gateway. Inside Ingestion, run `python -m app.reindex` to preview eligible sources, then `python -m app.reindex --apply` to queue them. The command now defaults to dry run and accepts `--workspace <uuid>`. Wait for running jobs and repeat the command if they used the old model. Wait for all eligible sources to finish and run the retrieval evaluation and citation checks with the new model. Keep serving from the original project while you validate the new index. Plan cutover during a maintenance window and include any uploads or changes made after the rehearsal snapshot.
 
 ## Operational checks
 

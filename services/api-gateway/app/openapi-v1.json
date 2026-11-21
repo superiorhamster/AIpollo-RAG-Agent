@@ -6091,6 +6091,15 @@
             },
             "type": "array",
             "title": "Citations"
+          },
+          "source": {
+            "default": "document",
+            "enum": [
+              "document",
+              "conversation"
+            ],
+            "title": "Source",
+            "type": "string"
           }
         },
         "type": "object",
@@ -6408,6 +6417,22 @@
             ],
             "title": "Error Code"
           },
+          "retryable": {
+            "type": "boolean",
+            "default": false,
+            "description": "A final Ask completion returned HTTP 503 from Model Gateway."
+          },
+          "objective": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Objective"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The saved Ask objective, including the original document selection."
+          },
           "query": {
             "type": "string",
             "title": "Query"
@@ -6421,6 +6446,19 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "retry_of_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Retry Of Run Id"
           }
         },
         "type": "object",
@@ -6497,6 +6535,19 @@
               }
             ],
             "title": "Conversation Id"
+          },
+          "retry_of_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Retry Of Run Id"
           }
         },
         "type": "object",

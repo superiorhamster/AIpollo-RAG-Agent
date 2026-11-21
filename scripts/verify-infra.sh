@@ -6,7 +6,11 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-compose=(docker compose --env-file .env -f compose.dev.yaml)
+compose=(docker compose --env-file .env)
+read -r -a compose_files <<< "${COMPOSE_FILES:-compose.dev.yaml}"
+for file in "${compose_files[@]}"; do
+  compose+=(-f "$file")
+done
 failed=0
 
 for service in "$@"; do

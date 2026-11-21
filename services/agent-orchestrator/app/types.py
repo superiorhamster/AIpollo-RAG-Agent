@@ -48,6 +48,7 @@ class StartRun(BaseModel):
     plan_id: UUID | None = None
     plan_version: int | None = Field(default=None, ge=1)
     conversation_id: UUID | None = None
+    retry_of_run_id: UUID | None = None
 
     @model_validator(mode="after")
     def require_mode_inputs(self):
@@ -58,6 +59,8 @@ class StartRun(BaseModel):
             raise ValueError("Direct runs require an objective")
         if self.mode != "ASK" and self.conversation_id is not None:
             raise ValueError("Only Ask accepts a conversation")
+        if self.mode != "ASK" and self.retry_of_run_id is not None:
+            raise ValueError("Only Ask accepts a retry parent")
         return self
 
 
@@ -81,6 +84,26 @@ class Claim(BaseModel):
 class GeneratedAnswer(BaseModel):
     claims: list[Claim] = Field(max_length=12)
 
+
+class AskClaim(Claim):
+    evidence: list[UUID] = Field(max_length=6)
+    source: Literal["document", "conversation"] = "document"
+
+    @model_validator(mode="after")
+    def validate_provenance(self):
+        if bool(self.evidence) != (self.source == "document"):
+            raise ValueError("Only document claims require evidence, and chat claims must have none")
+        return self
+
+
+class GeneratedAskAnswer(BaseModel):
+    claims: list[AskClaim] = Field(max_length=12)
+
+
+class SearchRewrite(BaseModel, extra="forbid"):
+    query: Query
+
+
 class Citation(Chunk):
     document_id: UUID
     chunk_id: UUID
@@ -91,6 +114,7 @@ class CitedClaim(BaseModel):
     text: str
     fields: dict[FieldText, FieldText] = Field(default_factory=dict)
     citations: list[Citation]
+    source: Literal["document", "conversation"] = "document"
 
 
 class Answer(BaseModel):
@@ -101,6 +125,7 @@ class Answer(BaseModel):
 
 class RunView(BaseModel):
     run_id: UUID
+    retry_of_run_id: UUID | None = None
     interaction: Literal["ASK", "AGENT", "PLAN"]
     conversation_id: UUID | None
     plan_id: UUID | None
@@ -110,6 +135,8 @@ class RunView(BaseModel):
     step: str | None
     result: Answer | None
     error_code: str | None
+    retryable: bool = False
+    objective: Objective | None = None
     query: str
     created_at: datetime
     updated_at: datetime
