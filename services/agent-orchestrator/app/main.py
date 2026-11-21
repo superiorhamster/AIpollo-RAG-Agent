@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -19,13 +20,14 @@ from rag_db import database_ready, install_database_errors, open_database
 from rag_http import ACCESS_COOKIE, ACCESS_FORMAT, ApiError, health_response, install_http, request_id, require_service, unauthorized, unavailable
 
 from .types import Conversation, EditPlan, Objective, PlanView, RunView, StartRun, Version
+from .history import input_limit, prior_history
 from .worker import ASK_COMPLETION_UNAVAILABLE, Worker, authorize
 
 SERVICE = "agent-orchestrator"
 BASE = "/v1/workspaces/{workspace_id}"
 Key = Annotated[UUID, Header(alias="Idempotency-Key")]
 RUN_FIELDS = (
-    "run_id, interaction, conversation_id, plan_id, plan_version, "
+    "run_id, retry_of_run_id, interaction, conversation_id, plan_id, plan_version, "
     "status, step, result, "
     f"CASE WHEN error_code = '{ASK_COMPLETION_UNAVAILABLE}' THEN 'interaction_unavailable' ELSE error_code END AS error_code, "
     f"COALESCE(error_code = '{ASK_COMPLETION_UNAVAILABLE}', false) AS retryable, "
@@ -62,7 +64,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/readyz")
 async def readiness() -> Response:
-    return health_response(SERVICE, await database_ready(app.state.database, "orchestration", "orchestration_001"))
+    return health_response(SERVICE, await database_ready(app.state.database, "orchestration", "orchestration_002"))
 
 
 def missing() -> ApiError:
@@ -94,7 +96,9 @@ Actor = Annotated[UUID, Depends(actor)]
 
 
 def digest(payload) -> str:
-    return hashlib.sha256(payload.model_dump_json().encode()).hexdigest()
+    # Preserve existing idempotency hashes for requests predating retry parents.
+    exclude = {"retry_of_run_id"} if isinstance(payload, StartRun) and payload.retry_of_run_id is None else None
+    return hashlib.sha256(payload.model_dump_json(exclude=exclude).encode()).hexdigest()
 
 
 def scope(workspace_id: UUID, user_id: UUID, identifier: UUID) -> dict:
@@ -240,6 +244,31 @@ async def owned_conversation(connection: AsyncConnection, keys: dict) -> None:
         raise missing()
 
 
+async def retry_context(connection: AsyncConnection, data: StartRun, workspace_id: UUID,
+                        user_id: UUID) -> dict:
+    result = await connection.execute(text("""
+        SELECT * FROM orchestration.runs
+        WHERE workspace_id=:workspace AND user_id=:user AND run_id=:id FOR UPDATE
+    """), scope(workspace_id, user_id, data.retry_of_run_id))
+    original = result.mappings().one_or_none()
+    if original is None:
+        raise missing()
+    if (original["interaction"] != "ASK" or original["status"] != "failed"
+            or original["error_code"] != ASK_COMPLETION_UNAVAILABLE or original["conversation_id"] is None):
+        raise ApiError(409, "run_not_retryable", "Only an unavailable Ask completion can be retried.")
+    objective = Objective.model_validate(original["input"])
+    if (data.objective != objective
+            or (data.conversation_id is not None and data.conversation_id != original["conversation_id"])):
+        raise ApiError(409, "retry_context_conflict", "Retry must preserve the original question and sources.")
+    history = original["history_snapshot"]
+    if history is None:
+        history = await prior_history(connection, original, input_limit())
+        await connection.execute(text("""
+            UPDATE orchestration.runs SET history_snapshot=CAST(:history AS jsonb) WHERE run_id=:id
+        """), {"id": original["run_id"], "history": json.dumps(history, ensure_ascii=False)})
+    return {"objective": objective, "conversation": original["conversation_id"], "history": history}
+
+
 @app.post(BASE + "/runs", status_code=202, response_model=RunView)
 async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor, request: Request):
     keys = scope(workspace_id, user_id, uuid4())
@@ -257,6 +286,10 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
             return {name: value for name, value in replay.items() if name != "request_hash"}
         objective = await pinned_objective(connection, data, workspace_id, user_id)
         conversation = data.conversation_id
+        history = None
+        if data.retry_of_run_id is not None:
+            retry = await retry_context(connection, data, workspace_id, user_id)
+            objective, conversation, history = retry["objective"], retry["conversation"], retry["history"]
         if data.mode == "ASK":
             if conversation:
                 await owned_conversation(connection, scope(workspace_id, user_id, conversation))
@@ -269,14 +302,15 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
         result = await connection.execute(text(f"""
             INSERT INTO orchestration.runs (
                 run_id, workspace_id, user_id, interaction, input, conversation_id, plan_id, plan_version,
-                request_id, request_key, request_hash
+                request_id, request_key, request_hash, retry_of_run_id, history_snapshot
             ) VALUES (
                 :id, :workspace, :user, :mode, CAST(:input AS jsonb), :conversation, :plan, :version,
-                :request, :key, :hash
+                :request, :key, :hash, :retry, CAST(:history AS jsonb)
             ) RETURNING {RUN_FIELDS}
         """), {**keys, "mode": data.mode, "input": objective.model_dump_json(), "conversation": conversation,
                "plan": data.plan_id, "version": data.plan_version, "request": request_id(request),
-               "key": key, "hash": digest(data)})
+               "key": key, "hash": digest(data), "retry": data.retry_of_run_id,
+               "history": json.dumps(history, ensure_ascii=False) if history is not None else None})
         return dict(result.mappings().one())
 
 

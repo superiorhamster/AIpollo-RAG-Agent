@@ -48,6 +48,7 @@ class StartRun(BaseModel):
     plan_id: UUID | None = None
     plan_version: int | None = Field(default=None, ge=1)
     conversation_id: UUID | None = None
+    retry_of_run_id: UUID | None = None
 
     @model_validator(mode="after")
     def require_mode_inputs(self):
@@ -58,6 +59,8 @@ class StartRun(BaseModel):
             raise ValueError("Direct runs require an objective")
         if self.mode != "ASK" and self.conversation_id is not None:
             raise ValueError("Only Ask accepts a conversation")
+        if self.mode != "ASK" and self.retry_of_run_id is not None:
+            raise ValueError("Only Ask accepts a retry parent")
         return self
 
 
@@ -122,6 +125,7 @@ class Answer(BaseModel):
 
 class RunView(BaseModel):
     run_id: UUID
+    retry_of_run_id: UUID | None = None
     interaction: Literal["ASK", "AGENT", "PLAN"]
     conversation_id: UUID | None
     plan_id: UUID | None

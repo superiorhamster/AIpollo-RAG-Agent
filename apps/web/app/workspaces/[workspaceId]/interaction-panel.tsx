@@ -60,6 +60,7 @@ type Result = { kind?: string; claims: {
 }[]; insufficient_evidence: boolean }
 type Run = {
   run_id: string
+  retry_of_run_id?: string | null
   conversation_id: string | null
   interaction: Mode
   plan_version: number | null
@@ -190,9 +191,10 @@ export function InteractionPanel({
     setActiveId(fresh.run_id)
   }
 
-  function submitRun(mode: 'ASK' | 'AGENT', objective: Objective, conversationId?: string) {
+  function submitRun(mode: 'ASK' | 'AGENT', objective: Objective, conversationId?: string, retryOfRunId?: string) {
     return api<Run>(base + '/runs', 'POST', {
       mode, objective, conversation_id: mode === 'ASK' ? conversationId : undefined,
+      retry_of_run_id: retryOfRunId,
     }, crypto.randomUUID())
   }
 
@@ -202,7 +204,7 @@ export function InteractionPanel({
     setRetryingId(originalId)
     setRetryErrors(prior => ({ ...prior, [originalId]: '' }))
     try {
-      const fresh = await submitRun('ASK', failed.objective, failed.conversation_id)
+      const fresh = await submitRun('ASK', failed.objective, failed.conversation_id, failed.run_id)
       retryRunIds.current.set(fresh.run_id, originalId)
       setRetries(prior => ({ ...prior, [originalId]: { ...fresh, query: fresh.query ?? failed.query } }))
       if (fresh.status === 'queued' || fresh.status === 'running') {

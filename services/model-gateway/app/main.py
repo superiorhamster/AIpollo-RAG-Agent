@@ -32,7 +32,7 @@ def model_unavailable() -> ApiError:
     return ApiError(503, "model_unavailable", "The embedding model is not configured or available.")
 
 
-def valid_provider_url(url: str) -> bool:
+def valid_provider_url(url: str, *, embedding: bool = False) -> bool:
     parsed = urlsplit(url)
     if not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         return False
@@ -40,7 +40,8 @@ def valid_provider_url(url: str) -> bool:
         return True
     return (
         parsed.scheme == "http"
-        and parsed.hostname in {"host.docker.internal", "localhost", "127.0.0.1", "::1"}
+        and parsed.hostname in ({"host.docker.internal", "localhost", "127.0.0.1", "::1"}
+                               | ({"ollama"} if embedding else set()))
         and os.environ.get("MODEL_ALLOW_LOCAL_HTTP") == "true"
     )
 
@@ -54,7 +55,7 @@ def load_embedding_config() -> EmbeddingConfig | None:
     dimensions = os.environ.get("MODEL_EMBEDDING_DIMENSIONS")
     if os.environ.get("MODEL_PROVIDER") != "openai-compatible" or not all((endpoint, model, key, dimensions)):
         return None
-    if not valid_provider_url(endpoint):
+    if not valid_provider_url(endpoint, embedding=True):
         raise ValueError("Set a valid embedding provider URL using HTTPS or explicitly enabled local HTTP.")
     revision = os.environ.get("MODEL_EMBEDDING_REVISION", "1")
     version = hashlib.sha256(f"{endpoint}\n{model}\n{dimensions}\n{revision}".encode()).hexdigest()

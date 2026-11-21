@@ -1,0 +1,35 @@
+# Opt in with make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" up.
+services:
+  ollama:
+    image: ollama/ollama:0.40.16@sha256:910d0d8107b538fb0894e63163eb195de0cc7aefcbc666dc62d3b18f71124592
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_MODELS: /models
+      OLLAMA_NO_CLOUD: "true"
+    volumes:
+      - type: bind
+        source: ${OLLAMA_MODELS_DIR:?Set OLLAMA_MODELS_DIR to the downloaded Ollama models directory}
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "ollama", "show", "embeddinggemma-2:270m-q8_0-text"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  model-gateway:
+    environment:
+      MODEL_PROVIDER: openai-compatible
+      MODEL_ALLOW_LOCAL_HTTP: "true"
+      MODEL_EMBEDDING_BASE_URL: http://ollama:11434/v1
+      MODEL_EMBEDDING_NAME: embeddinggemma-2:270m-q8_0-text
+      MODEL_EMBEDDING_API_KEY: ollama
+      MODEL_EMBEDDING_DIMENSIONS: "768"
+      MODEL_EMBEDDING_REVISION: c21dd30c1e38444d3b4faa091407b6fa97221447b4965d74931d43d7f09bbbfd
+    depends_on:
+      ollama:
+        condition: service_healthy

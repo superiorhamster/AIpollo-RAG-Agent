@@ -75,6 +75,52 @@ For a local OpenAI-compatible endpoint on the Docker host, use http://host.docke
 
 Set MODEL_CHAT_BASE_URL, MODEL_CHAT_NAME, and MODEL_CHAT_API_KEY for the compatible chat endpoint. In **Chats**, choose sources in the sidebar and select Ask, Plan, or Agent in the composer. On a narrow screen, select sources directly in the composer. Accepting a plan saves approval for its current version. Use **Run accepted plan** to start it. Edit or regenerate to draft a new version. Only you can access your conversations, plans, and runs.
 
+### Local EmbeddingGemma in Compose
+
+The optional Ollama overlay uses `embeddinggemma-2:270m-q8_0-text` with **768 output
+dimensions**, verified against the downloaded model's embedding API. It runs the
+pinned Ollama 0.40.16 image on CPU. Its internal endpoint is
+`http://ollama:11434/v1`; no Ollama host port is published. Base URLs stop at `/v1`,
+because Model Gateway appends `/embeddings` itself.
+
+Set `OLLAMA_MODELS_DIR` in your private `.env` to the absolute directory containing
+the existing Ollama `manifests/` and `blobs/` directories. On the current machine it
+is `/home/anhpd/Project/Group/RAG/.runtime/models`. The directory is mounted read-only;
+the image and model are separate downloads, and the overlay never pulls model weights.
+Update models through the host Ollama instance, then update the configured model
+revision and re-index. Keep model files outside Git.
+
+```bash
+make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" compose-check
+make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" up
+make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" verify-embedding
+make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" eval-embedding
+make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" reindex-embeddings
+make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" reindex-embeddings APPLY=1
+```
+
+The overlay supplies embedding configuration and the placeholder API key `ollama`.
+Keep existing `MODEL_CHAT_*` values in `.env`. Use the same `COMPOSE_FILES` argument
+for `ps`, `logs`, `verify`, and `down`. Phase verification scripts continue using
+isolated fixture projects and do not require this model or its cache.
+
+Re-index defaults to a dry run across active workspaces. Add `WORKSPACE_ID=<uuid>` to
+limit it to one workspace. Applying it requeues eligible completed/failed index jobs,
+resets attempts and keeps old generation pointers until publication succeeds.
+Already current successful jobs, queued/running jobs, preview jobs and deleted
+sources are skipped. Wait for running jobs and rerun the command if they used the
+previous model. Check document jobs until the selected sources finish. The model,
+endpoint, dimensions and revision determine a new fingerprint; retrieval never mixes
+old vectors into the new collection. Searches can temporarily lack evidence while
+sources are rebuilding.
+
+To roll back, stop the overlay project while keeping volumes, restore the earlier
+embedding settings, start the base Compose project, and apply re-index again. Old
+collections and original documents are retained. `eval-embedding` reports local
+cosine retrieval metrics on the synthetic bilingual corpus and compares the fixture
+baseline. The Phase 03 evaluation separately checks live Qdrant hybrid ranking and
+tenant filters. Neither small corpus substitutes for production retrieval evaluation.
+
 ### Gemini embeddings return 502 `invalid_embedding`
 
 Gemini's OpenAI-compatible endpoint can return HTTP 200 with a valid embedding row that omits `index`. The [Model Gateway adapter](services/model-gateway/app/main.py) sends each input separately to `generativelanguage.googleapis.com`, with up to four concurrent requests per batch, and assembles the vectors in input order. The entire Gemini batch has a 25-second deadline, within Ingestion's 30-second read timeout. A timeout or failed response cancels outstanding requests and returns an error for the whole batch. Each Gemini response must contain exactly one row. Its index may be omitted or set to the integer `0`. Dimension and nonzero-vector checks still apply. Other hosts use the existing indexed batch path.

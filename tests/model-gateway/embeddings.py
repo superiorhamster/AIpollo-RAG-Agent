@@ -8,20 +8,21 @@ from unittest.mock import patch
 
 import httpx
 
-from app.main import app, load_embedding_config
+from app.main import app, load_embedding_config, valid_provider_url
 
 GEMINI = "https://generativelanguage.googleapis.com/v1beta/openai"
 OTHER = "https://embeddings.example.test/v1"
 
 
 class Embeddings(unittest.IsolatedAsyncioTestCase):
-    async def embed(self, endpoint, texts, upstream):
+    async def embed(self, endpoint, texts, upstream, *, dimensions="3072", local_http=False):
         with patch.dict(os.environ, {
             "MODEL_PROVIDER": "openai-compatible",
             "MODEL_EMBEDDING_BASE_URL": endpoint,
             "MODEL_EMBEDDING_NAME": "test-model",
             "MODEL_EMBEDDING_API_KEY": "test-key",
-            "MODEL_EMBEDDING_DIMENSIONS": "3072",
+            "MODEL_EMBEDDING_DIMENSIONS": dimensions,
+            "MODEL_ALLOW_LOCAL_HTTP": "true" if local_http else "false",
         }):
             config = load_embedding_config()
             async with (
@@ -156,6 +157,37 @@ class Embeddings(unittest.IsolatedAsyncioTestCase):
         for rows in ([{"embedding": [1] * 3072}], [{"index": 0, "embedding": [1] * 3072}]):
             response = await self.embed(OTHER, ["first", "second"], lambda _: httpx.Response(200, json={"data": rows}))
             self.assertEqual(response.status_code, 502)
+
+    async def test_ollama_768_dimension_batch_preserves_input_order(self):
+        def upstream(request):
+            self.assertEqual(str(request.url), "http://ollama:11434/v1/embeddings")
+            self.assertEqual(json.loads(request.content)["input"], ["Phòng B4-201.", "Bộ chuyển HDMI."])
+            return httpx.Response(200, json={"data": [
+                {"index": 1, "embedding": [2.] * 768}, {"index": 0, "embedding": [1.] * 768},
+            ]})
+        response = await self.embed("http://ollama:11434/v1", ["Phòng B4-201.", "Bộ chuyển HDMI."],
+                                    upstream, dimensions="768", local_http=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["vectors"], [[1.] * 768, [2.] * 768])
+
+    async def test_ollama_invalid_vectors_and_unavailable_model(self):
+        for vector in ([1.] * 512, [0.] * 768):
+            response = await self.embed("http://ollama:11434/v1", ["Tiếng Việt"],
+                                        lambda _: httpx.Response(200, json={"data": [{"index": 0, "embedding": vector}]}),
+                                        dimensions="768", local_http=True)
+            self.assertEqual(response.status_code, 502)
+        response = await self.embed("http://ollama:11434/v1", ["Tiếng Việt"],
+                                    lambda _: httpx.Response(404), dimensions="768", local_http=True)
+        self.assertEqual(response.status_code, 503)
+
+    def test_ollama_local_http_is_opt_in_and_embedding_only(self):
+        with patch.dict(os.environ, {"MODEL_ALLOW_LOCAL_HTTP": "false"}):
+            self.assertFalse(valid_provider_url("http://ollama:11434/v1", embedding=True))
+        with patch.dict(os.environ, {"MODEL_ALLOW_LOCAL_HTTP": "true"}):
+            self.assertTrue(valid_provider_url("http://ollama:11434/v1", embedding=True))
+            self.assertFalse(valid_provider_url("http://ollama:11434/v1"))
+            for url in ("http://untrusted:11434/v1", "http://ollama.evil/v1", "http://user:pass@ollama/v1"):
+                self.assertFalse(valid_provider_url(url, embedding=True))
 
 
 if __name__ == "__main__":

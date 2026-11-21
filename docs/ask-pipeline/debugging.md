@@ -46,6 +46,11 @@ Run this only in an approved provider test session, ideally with a fixture or sy
 
 ## Manual Retry checks
 
+- Confirm each Retry POST includes the failed attempt's `retry_of_run_id`. The server
+  pins its private history snapshot. Try a later question about a different room,
+  then retry the earlier failed question; the later room must not enter its rewrite
+  input. Test cross-user/workspace parents and changed sources return 404/409.
+
 - Inspect the authorized run snapshot. `interaction_unavailable` alone is generic. A final Ask Model Gateway HTTP 503 produces `retryable: true`; a rewrite fallback, unrelated validation error, or historical generic failure lacks that flag. The snapshot includes the saved Ask objective. UI **Retry** submits it with the original conversation ID and a fresh idempotency key. [Run projection](../../services/agent-orchestrator/app/main.py#L27) · [Retry UI](../../apps/web/app/workspaces/%5BworkspaceId%5D/interaction-panel.tsx#L199)
 - An automatic gateway retry on upstream 503 uses the **same** request ID and stays within one run. A manual Retry creates a **new** run and request ID. Compare timestamps and route status for each ID. Rewrite and compose can share a request ID within a run, and an abandoned rewrite can log after compose starts. A second eligible failure re-enables the button. A successful attempt replaces the displayed failed turn until page reload. [Gateway retry](../../services/model-gateway/app/main.py#L202)
 

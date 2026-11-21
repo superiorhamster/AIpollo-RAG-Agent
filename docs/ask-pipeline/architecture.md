@@ -43,9 +43,28 @@ The [rewrite system prompt](../../services/agent-orchestrator/app/ask_prompts.py
 
 ## Conversation history and New chat
 
-`orchestration.conversations` stores identity and ownership. `orchestration.runs` stores the objective, state and accepted result. Reopening a conversation loads run snapshots for display. The worker independently selects up to six earlier successful Ask runs scoped to the same workspace, user and conversation. It excludes the current run and rows at or after its creation time. It takes the newest eligible rows, using run ID to break ties, then supplies them in chronological order. Each turn carries the original user question and up to 900 characters of joined accepted answer text. Successful abstentions can contribute a question with an empty answer. The serialized history cap is the smaller of 4,500 bytes and one third of the configured input budget. Older citations and retrieved passages are excluded. **New chat** clears the current conversation and turn display, preserves the source selections, and creates a new conversation on the next Ask. [History query](../../services/agent-orchestrator/app/worker.py#L115) · [Conversation API](../../services/agent-orchestrator/app/main.py#L340)
+Before any model call, the worker persists its bounded Q&A selection in the private
+`history_snapshot` column, including an empty array. Reclaimed executions reuse that
+snapshot. Snapshots are never returned in the public run view. During final prompt
+packing, ranked fresh passages take priority; the worker then adds the newest history
+that fits, in chronological order. System bytes and the final prompt count toward the
+input cap and the rewrite plus final completion share the configured cost budget.
+
+`orchestration.conversations` stores identity and ownership. `orchestration.runs` stores the objective, state and accepted result. Reopening a conversation loads run snapshots for display. On first execution the worker selects up to six earlier successful Ask runs scoped to the same workspace, user and conversation. It excludes the current run and rows at or after its creation time. It takes the newest eligible rows, using run ID to break ties, then supplies them in chronological order. Each turn carries the original user question and up to 900 characters of joined accepted answer text. Successful abstentions can contribute a question with an empty answer. The serialized history cap is the smaller of 4,500 bytes and one third of the configured input budget. Older citations and retrieved passages are excluded. **New chat** clears the current conversation and turn display, preserves the source selections, and creates a new conversation on the next Ask. [History query](../../services/agent-orchestrator/app/worker.py#L115) · [Conversation API](../../services/agent-orchestrator/app/main.py#L340)
 
 ## Manual Retry
+
+Retry requests now include `retry_of_run_id`. The backend verifies the parent belongs
+to the requesting user/workspace and is a retryable failed Ask. It pins objective and
+conversation from that row, rejects conflicting client inputs with 409, and copies
+the parent's history snapshot into the new run. Later conversation turns cannot
+change the retried question's context. For pre-migration failures without a snapshot,
+the backend constructs and saves one using the original creation-time cutoff. This
+cannot recover historical success states that were never recorded. Old generic
+failures remain ineligible. Existing requests without a retry parent retain their
+previous idempotency hashes. Apply orchestration_002 before starting the new service.
+Keep the migration and audit columns on rollback; any rollback build must retain the
+orchestration_002 readiness check.
 
 When the final Ask completion returns HTTP 503 from Model Gateway, the worker stores an internal marker. Authorized run snapshots expose `retryable: true` and the saved Ask `objective`, while the public error stays `interaction_unavailable`. Rewrite failures can fall back and generic worker failures do not get the marker. Older failures lack it and cannot be classified retroactively. [Worker classification](../../services/agent-orchestrator/app/worker.py#L142) · [Run projection](../../services/agent-orchestrator/app/main.py#L27)
 

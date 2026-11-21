@@ -41,6 +41,12 @@ flowchart LR
 
 ## Main document flow
 
+Development can use the optional `compose.ollama.yaml` overlay. Ollama serves only
+the configured embedding model on the private Compose network, with an existing
+read-only model cache. Domain services continue calling Model Gateway; the chat
+provider remains independently configured. Embedding fingerprints isolate model
+versions and Ingestion owns re-indexing and publishing replacement generations.
+
 1. Authenticated user requests an upload URL or uploads through the gateway/document service.
 2. Document service stores the raw file in object storage and records metadata.
 3. An ingestion job is queued.

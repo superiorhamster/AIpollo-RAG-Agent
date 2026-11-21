@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from rag_telemetry import operation
 from .ask_prompts import ANSWER_SYSTEM, REWRITE_SYSTEM
+from .history import input_limit, prior_history
 from .types import FIELD_KEYS, AskClaim, GeneratedAnswer, GeneratedAskAnswer, SearchRewrite
 
 LOG = logging.getLogger(__name__)
@@ -73,7 +74,7 @@ class Worker:
         self.max_attempts = min(3, max(1, int(os.environ.get("RUN_MAX_ATTEMPTS", "2"))))
         self.max_tokens = min(2048, max(32, int(os.environ.get("RUN_MAX_OUTPUT_TOKENS", "800"))))
         self.max_steps = min(2, max(1, int(os.environ.get("RUN_MAX_STEPS", "2"))))
-        self.max_input_bytes = min(24_000, max(4096, int(os.environ.get("RUN_MAX_INPUT_BYTES", "14000"))))
+        self.max_input_bytes = input_limit()
         self.budget = max(0, int(os.environ.get("RUN_MAX_COST_MICRO_USD", "0")))
         self.input_cost = max(0, int(os.environ.get("MODEL_CHAT_INPUT_MICRO_USD_PER_1K", "0")))
         self.output_cost = max(0, int(os.environ.get("MODEL_CHAT_OUTPUT_MICRO_USD_PER_1K", "0")))
@@ -113,24 +114,28 @@ class Worker:
         access.raise_for_status()
 
     async def load_history(self, run):
-        history = []
         if run["interaction"] != "ASK" or run["conversation_id"] is None:
-            return history
-        async with self.database.connect() as connection:
-            rows = await connection.execute(text("""
-                SELECT input->>'query', jsonb_path_query_array(result, '$.claims[*].text')
-                FROM orchestration.runs
-                WHERE workspace_id=:workspace AND user_id=:user AND conversation_id=:conversation
-                  AND interaction='ASK' AND status='succeeded' AND created_at < :created AND run_id <> :run
-                ORDER BY created_at DESC, run_id DESC LIMIT 6
-            """), {"workspace": run["workspace_id"], "user": run["user_id"],
-                   "conversation": run["conversation_id"], "created": run["created_at"], "run": run["run_id"]})
-            for question, answers in rows:
-                turn = {"question": question, "answer": " ".join(answers or [])[:900]}
-                candidate = [turn, *history]
-                if len(json.dumps(candidate, ensure_ascii=False).encode()) > min(4500, self.max_input_bytes // 3):
-                    break
-                history = candidate
+            return []
+        if run.get("history_snapshot") is not None:
+            return run["history_snapshot"]
+        async with self.database.begin() as connection:
+            row = await connection.execute(text("""
+                SELECT history_snapshot FROM orchestration.runs
+                WHERE run_id=:run AND lease_id=:lease AND status='running'
+                FOR UPDATE
+            """), {"run": run["run_id"], "lease": run["lease_id"]})
+            saved = row.mappings().one_or_none()
+            if saved is None:
+                raise StopRun("cancelled")
+            history = saved["history_snapshot"]
+            if history is None:
+                history = await prior_history(connection, run, self.max_input_bytes)
+                await connection.execute(text("""
+                    UPDATE orchestration.runs SET history_snapshot=CAST(:history AS jsonb)
+                    WHERE run_id=:run AND lease_id=:lease AND status='running'
+                """), {"run": run["run_id"], "lease": run["lease_id"],
+                       "history": json.dumps(history, ensure_ascii=False)})
+        run["history_snapshot"] = history
         return history
 
     def estimate_cost(self, system, content, tokens):
@@ -197,15 +202,19 @@ class Worker:
         prompt = {"task": kind, "fields": expected_fields, "objective": run["input"]["query"], "capability": run["input"]["capability"],
                   "evidence": []}
         if is_ask:
-            prompt["history"] = list(history)
-            while prompt["history"] and len(json.dumps(prompt, ensure_ascii=False).encode()) > limit:
-                prompt["history"].pop(0)
+            prompt["history"] = []
         else:
             prompt["prior_questions"] = []
         for item in evidence:
             passage = {"id": item["chunk_id"], "text": item["text"], "section": item["section"]}
             candidate = {**prompt, "evidence": [*prompt["evidence"], passage]}
             if len(json.dumps(candidate, ensure_ascii=False).encode()) <= limit:
+                prompt = candidate
+        if is_ask:
+            for turn in reversed(history):
+                candidate = {**prompt, "history": [turn, *prompt["history"]]}
+                if len(json.dumps(candidate, ensure_ascii=False).encode()) > limit:
+                    break
                 prompt = candidate
         packed = json.dumps(prompt, ensure_ascii=False)
         if len(packed.encode()) > limit or (not prompt["evidence"] and not (plain_ask and prompt["history"])):

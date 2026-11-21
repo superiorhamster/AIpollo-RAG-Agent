@@ -6091,6 +6091,15 @@
             },
             "type": "array",
             "title": "Citations"
+          },
+          "source": {
+            "default": "document",
+            "enum": [
+              "document",
+              "conversation"
+            ],
+            "title": "Source",
+            "type": "string"
           }
         },
         "type": "object",
@@ -6437,6 +6446,19 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "retry_of_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Retry Of Run Id"
           }
         },
         "type": "object",
@@ -6513,6 +6535,19 @@
               }
             ],
             "title": "Conversation Id"
+          },
+          "retry_of_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Retry Of Run Id"
           }
         },
         "type": "object",

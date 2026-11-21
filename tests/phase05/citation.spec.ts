@@ -83,9 +83,10 @@ test('retries a gateway failure in the same Ask turn with the original sources',
   await expect(assistant.getByRole('button', { name: 'study.pdf, page 1' })).toBeVisible()
   await expect(assistant.locator('.aipollo-turn')).toHaveCount(1)
   await expect(retry).toHaveCount(0)
-  expect(submitted.slice(1).map(item => item.body)).toEqual(Array(2).fill({
-    ...submitted[0].body, conversation_id: conversation,
-  }))
+  expect(submitted.slice(1).map(item => item.body)).toEqual([
+    { ...submitted[0].body, conversation_id: conversation, retry_of_run_id: '1' },
+    { ...submitted[0].body, conversation_id: conversation, retry_of_run_id: '2' },
+  ])
   expect(new Set(submitted.map(item => item.key)).size).toBe(3)
 })
 

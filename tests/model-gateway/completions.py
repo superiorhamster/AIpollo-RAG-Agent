@@ -47,7 +47,7 @@ class CompletionRetry(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("retry_on_unavailable", calls[0])
 
     async def test_repeated_503_stops_after_retry(self):
-        with self.assertLogs("uvicorn.error") as logs:
+        with self.assertLogs("uvicorn.error", level="WARNING") as logs:
             response, calls = await self.request([503, 503], retry=True)
         self.assertEqual(response.status_code, 503)
         self.assertEqual(len(calls), 2)

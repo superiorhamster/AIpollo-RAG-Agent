@@ -38,6 +38,13 @@ class InMemoryRuns:
 
     def __init__(self):
         self.rows = []
+        self.selected = None
+
+    def mappings(self):
+        return self
+
+    def one_or_none(self):
+        return self.selected
 
     @asynccontextmanager
     async def connect(self):
@@ -50,6 +57,14 @@ class InMemoryRuns:
 
     async def execute(self, statement, params):
         sql = str(statement)
+        if "SELECT history_snapshot" in sql:
+            self.selected = next((row for row in self.rows if row["run_id"] == params["run"]
+                                  and row["lease_id"] == params["lease"] and row["status"] == "running"), None)
+            if self.selected is not None:
+                self.selected.setdefault("history_snapshot", None)
+        if "SET history_snapshot" in sql:
+            row = next(row for row in self.rows if row["run_id"] == params["run"])
+            row["history_snapshot"] = json.loads(params["history"])
         if "jsonb_path_query_array" in sql:
             for fragment in ("workspace_id=:workspace", "user_id=:user", "conversation_id=:conversation",
                              "status='succeeded'", "run_id <> :run", "created_at < :created", "LIMIT 6"):
@@ -202,6 +217,61 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
                 run = self.new_run(Q1, new_thread=True)
                 await worker.execute(run)
                 self.assertEqual((run["status"], run["error"]), ("failed", expected))
+
+    async def test_snapshot_survives_later_turns_and_worker_reexecution(self):
+        await self.turn(Q1, [SCHEDULE], [claim("Phòng B4-201.", SCHEDULE)])
+        original = self.new_run(Q2)
+        worker = Worker(self.database, None)
+        saved = await worker.load_history(original)
+        self.assertEqual(saved, [{"question": Q1, "answer": "Phòng B4-201."}])
+        await self.turn("Hãy nói về phòng B2-302.", [], [], saved)
+        self.assertEqual(await worker.load_history(original), saved)
+        retried = self.new_run(Q2)
+        retried["history_snapshot"] = saved
+        self.assertEqual(await worker.load_history(retried), saved)
+
+    async def test_empty_snapshot_is_not_rebuilt(self):
+        first = self.new_run(Q1)
+        worker = Worker(self.database, None)
+        self.assertEqual(await worker.load_history(first), [])
+        await self.turn("Một câu hỏi về phòng khác.", [], [])
+        first["created_at"] = 100
+        self.assertEqual(await worker.load_history(first), [])
+
+    async def test_evidence_precedes_history_at_small_input_limit(self):
+        with patch.dict(os.environ, {"RUN_MAX_INPUT_BYTES": "4096"}):
+            worker = Worker(self.database, None)
+        run = self.new_run(Q1)
+        source = passage("Schedule", "Buổi demo ở phòng B4-201. " + "x" * 1450)
+        history = [{"question": "Câu hỏi cũ " + "x" * 100, "answer": "x" * 880}]
+        worker.current = AsyncMock()
+        worker.complete = AsyncMock(return_value=json.dumps({"claims": [claim("B4-201.", source)]}))
+        result = await worker.compose(run, [source], history, 0)
+        packed = json.loads(worker.complete.call_args.args[2])
+        self.assertEqual(packed["evidence"][0]["id"], source["chunk_id"])
+        self.assertEqual(packed["history"], [])
+        self.assertLessEqual(len((ANSWER_SYSTEM + worker.complete.call_args.args[2]).encode()), 4096)
+        self.assertEqual(result["claims"][0]["citations"], [source])
+
+    async def test_newest_history_is_retained_in_remaining_space(self):
+        worker = Worker(self.database, None)
+        run = self.new_run(Q1)
+        worker.current = AsyncMock()
+        worker.complete = AsyncMock(return_value='{"claims":[]}')
+        history = [{"question": "old", "answer": "x" * 13000}, {"question": "new", "answer": "new answer"}]
+        await worker.compose(run, [SCHEDULE], history, 0)
+        packed = json.loads(worker.complete.call_args.args[2])
+        self.assertEqual(packed["history"], history[1:])
+
+    async def test_final_prompt_and_rewrite_share_the_cost_budget(self):
+        worker = Worker(self.database, None)
+        worker.current = AsyncMock()
+        worker.complete = AsyncMock()
+        worker.budget, worker.input_cost, worker.output_cost = 1, 1, 1
+        with self.assertRaises(StopRun) as caught:
+            await worker.compose(self.new_run(Q1), [SCHEDULE], [], 1)
+        self.assertEqual(caught.exception.code, "cost_limit")
+        worker.complete.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
