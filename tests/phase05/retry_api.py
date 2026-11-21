@@ -3,7 +3,9 @@
 import asyncio
 import hashlib
 import json
+import os
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -11,7 +13,7 @@ import httpx
 from sqlalchemy import text
 
 from app.main import app, actor
-from app.worker import ASK_COMPLETION_UNAVAILABLE
+from app.worker import ASK_COMPLETION_UNAVAILABLE, Worker
 from rag_db import open_database
 
 
@@ -197,6 +199,37 @@ class RetryApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((regenerated.json()["plan_version"], regenerated.json()["state"]), (3, "REVIEW"))
         self.assertEqual((await execute({**body, "plan_version": 2})).status_code, 409)
         self.assertEqual((await execute({**body, "plan_version": 3})).status_code, 409)
+
+    async def test_worker_executes_ask_with_a_read_only_database_mapping(self):
+        identifier = await self.seed(status="running", error=None)
+        async with self.database.begin() as connection:
+            await connection.execute(text("""
+                UPDATE orchestration.runs SET lease_id=:lease, lease_until=now()+interval '6 minutes',
+                    step='retrieve' WHERE run_id=:id
+            """), {"id": identifier, "lease": uuid4()})
+            rows = await connection.execute(text("SELECT * FROM orchestration.runs WHERE run_id=:id"), {"id": identifier})
+            run = rows.mappings().one()
+        citation = {"document_id": self.objective["document_ids"][0], "chunk_id": str(uuid4()),
+                    "name": "synthetic.pdf", "page": 1, "text": "Phòng B4-201.", "section": "", "region": None}
+
+        def upstream(request):
+            if request.url.host == "workspace-service":
+                return httpx.Response(200)
+            if request.url.host == "retrieval-service":
+                return httpx.Response(200, json={"evidence": [citation]})
+            return httpx.Response(200, json={"text": json.dumps({"claims": [
+                {"text": "Phòng B4-201.", "evidence": [citation["chunk_id"]]},
+            ]})})
+
+        with patch.dict(os.environ, {"MODEL_CHAT_TOKEN": "fixture", "RETRIEVAL_INTERACTION_TOKEN": "fixture",
+                                     "WORKSPACE_INTERACTION_TOKEN": "fixture", "RUN_MAX_COST_MICRO_USD": "0"}):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+                await Worker(self.database, client).execute(run)
+        saved = await self.stored(identifier)
+        self.assertEqual(saved["status"], "succeeded", saved["error_code"])
+        self.assertEqual(saved["history_snapshot"], [])
+        self.assertEqual(saved["result"]["claims"][0]["citations"], [citation])
+        self.assertIsNone(run["history_snapshot"])
 
 
 if __name__ == "__main__":

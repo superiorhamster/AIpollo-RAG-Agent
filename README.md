@@ -71,6 +71,10 @@ Configure an OpenAI-compatible embedding endpoint in the local environment with 
 
 In **Library**, open **Search sources** and select documents to find passages. A result opens its page in the document viewer. With the provider disabled, uploads and previews stay available and indexing waits. Inspect a document's jobs via the existing document jobs API.
 
+The CPU parser has a 110-second document-processing deadline. A document that
+exceeds it can still be previewed, but indexing reports `parse_failed`; incomplete
+extraction results are not published as searchable sources.
+
 For a local OpenAI-compatible endpoint on the Docker host, use http://host.docker.internal:PORT/v1 for both base URLs and enable MODEL_ALLOW_LOCAL_HTTP=true in the development environment.
 
 Set MODEL_CHAT_BASE_URL, MODEL_CHAT_NAME, and MODEL_CHAT_API_KEY for the compatible chat endpoint. In **Chats**, choose sources in the sidebar and select Ask, Plan, or Agent in the composer. On a narrow screen, select sources directly in the composer. Accepting a plan saves approval for its current version. Use **Run accepted plan** to start it. Edit or regenerate to draft a new version. Only you can access your conversations, plans, and runs.
@@ -79,9 +83,17 @@ Set MODEL_CHAT_BASE_URL, MODEL_CHAT_NAME, and MODEL_CHAT_API_KEY for the compati
 
 The optional Ollama overlay uses `embeddinggemma-2:270m-q8_0-text` with **768 output
 dimensions**, verified against the downloaded model's embedding API. It runs the
-pinned Ollama 0.40.16 image on CPU. Its internal endpoint is
-`http://ollama:11434/v1`; no Ollama host port is published. Base URLs stop at `/v1`,
-because Model Gateway appends `/embeddings` itself.
+pinned Ollama 0.40.16 image on CPU. Its internal origin is
+`http://ollama:11434`; no Ollama host port is published. The overlay selects
+`MODEL_EMBEDDING_PROTOCOL=ollama`, using native `/api/embed` with an 8192-token
+context and four CPU threads, matching the downloaded model's working host profile.
+The default `openai` protocol remains available for compatible providers; its base
+URLs stop at `/v1`, because Model Gateway appends `/embeddings` itself.
+
+The Ollama healthcheck computes a synthetic embedding before allowing Model Gateway
+to start and keeps the model loaded. CPU cold start can exceed the gateway's normal
+25-second deadline; the readiness probe allows 180 seconds. The loaded model consumes
+memory even while idle. Metadata availability alone does not mark the model ready.
 
 Set `OLLAMA_MODELS_DIR` in your private `.env` to the absolute directory containing
 the existing Ollama `manifests/` and `blobs/` directories. On the current machine it
@@ -110,7 +122,8 @@ resets attempts and keeps old generation pointers until publication succeeds.
 Already current successful jobs, queued/running jobs, preview jobs and deleted
 sources are skipped. Wait for running jobs and rerun the command if they used the
 previous model. Check document jobs until the selected sources finish. The model,
-endpoint, dimensions and revision determine a new fingerprint; retrieval never mixes
+endpoint, dimensions and revision determine a new fingerprint; the Ollama protocol
+and CPU/context options also participate. Retrieval never mixes
 old vectors into the new collection. Searches can temporarily lack evidence while
 sources are rebuilding.
 

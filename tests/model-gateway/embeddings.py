@@ -15,7 +15,7 @@ OTHER = "https://embeddings.example.test/v1"
 
 
 class Embeddings(unittest.IsolatedAsyncioTestCase):
-    async def embed(self, endpoint, texts, upstream, *, dimensions="3072", local_http=False):
+    async def embed(self, endpoint, texts, upstream, *, dimensions="3072", local_http=False, protocol="openai"):
         with patch.dict(os.environ, {
             "MODEL_PROVIDER": "openai-compatible",
             "MODEL_EMBEDDING_BASE_URL": endpoint,
@@ -23,6 +23,7 @@ class Embeddings(unittest.IsolatedAsyncioTestCase):
             "MODEL_EMBEDDING_API_KEY": "test-key",
             "MODEL_EMBEDDING_DIMENSIONS": dimensions,
             "MODEL_ALLOW_LOCAL_HTTP": "true" if local_http else "false",
+            "MODEL_EMBEDDING_PROTOCOL": protocol,
         }):
             config = load_embedding_config()
             async with (
@@ -188,6 +189,39 @@ class Embeddings(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(valid_provider_url("http://ollama:11434/v1"))
             for url in ("http://untrusted:11434/v1", "http://ollama.evil/v1", "http://user:pass@ollama/v1"):
                 self.assertFalse(valid_provider_url(url, embedding=True))
+
+    async def test_native_ollama_matches_the_bounded_cpu_profile(self):
+        def upstream(request):
+            self.assertEqual(str(request.url), "http://ollama:11434/api/embed")
+            body = json.loads(request.content)
+            self.assertEqual(body["options"], {"num_ctx": 8192, "num_thread": 4})
+            self.assertEqual(body["dimensions"], 768)
+            self.assertFalse(body["truncate"])
+            self.assertEqual(body["keep_alive"], -1)
+            self.assertEqual(body["input"], ["first", "second"])
+            return httpx.Response(200, json={"embeddings": [[1.] * 768, [2.] * 768]})
+        response = await self.embed("http://ollama:11434", ["first", "second"], upstream,
+                                    dimensions="768", local_http=True, protocol="ollama")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["vectors"], [[1.] * 768, [2.] * 768])
+
+    async def test_native_ollama_rejects_count_shape_and_zero_vectors(self):
+        for vectors in ([], [[1.] * 768], [[1.] * 512, [1.] * 512], [[0.] * 768, [0.] * 768]):
+            response = await self.embed("http://ollama:11434", ["first", "second"],
+                                        lambda _: httpx.Response(200, json={"embeddings": vectors}),
+                                        dimensions="768", local_http=True, protocol="ollama")
+            self.assertEqual(response.status_code, 502)
+
+    def test_protocol_changes_embedding_fingerprint(self):
+        with patch.dict(os.environ, {"MODEL_PROVIDER": "openai-compatible", "MODEL_EMBEDDING_BASE_URL": OTHER,
+                                     "MODEL_EMBEDDING_NAME": "fixture", "MODEL_EMBEDDING_API_KEY": "fixture",
+                                     "MODEL_EMBEDDING_DIMENSIONS": "768", "MODEL_EMBEDDING_PROTOCOL": "openai"}):
+            original = load_embedding_config().fingerprint
+            with patch.dict(os.environ, {"MODEL_EMBEDDING_PROTOCOL": "ollama"}):
+                self.assertNotEqual(load_embedding_config().fingerprint, original)
+            with patch.dict(os.environ, {"MODEL_EMBEDDING_PROTOCOL": "unknown"}):
+                with self.assertRaises(ValueError):
+                    load_embedding_config()
 
 
 if __name__ == "__main__":

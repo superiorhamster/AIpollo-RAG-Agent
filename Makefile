@@ -56,7 +56,7 @@ verify-embedding:
 	$(COMPOSE) exec -T model-gateway python - < scripts/verify-embedding.py
 
 eval-embedding:
-	$(COMPOSE) run --rm --no-deps -T -v "$(CURDIR)/tests/eval:/eval:ro" model-gateway python /eval/embedding_provider.py
+	$(COMPOSE) run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$(CURDIR)/tests/eval:/eval:ro" model-gateway python /eval/embedding_provider.py
 
 reindex-embeddings:
 	$(COMPOSE) exec -T ingestion-service python -m app.reindex $(if $(filter 1,$(APPLY)),--apply,) $(if $(WORKSPACE_ID),--workspace "$(WORKSPACE_ID)",)

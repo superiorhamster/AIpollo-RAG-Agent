@@ -65,8 +65,13 @@ async function signUp(page: Page, email: string) {
   await expect(page).toHaveURL(/\/sign-in$/)
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password', { exact: true }).fill(password)
+  const response = page.waitForResponse(result => result.request().method() === 'POST' &&
+    new URL(result.url()).pathname === '/v1/auth/login')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Workspaces' })).toBeVisible()
+  const loggedIn = await response
+  expect(loggedIn.status(), await loggedIn.text()).toBe(200)
+  await expect(page).toHaveURL(/\/workspaces$/)
+  await expect(page.getByRole('heading', { name: 'Workspaces', exact: true })).toBeVisible({ timeout: 15000 })
 }
 
 async function userId(page: Page) {

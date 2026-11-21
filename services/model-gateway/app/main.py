@@ -26,6 +26,7 @@ LOG = logging.getLogger("uvicorn.error")
 GEMINI_CONCURRENCY = 4
 # Ingestion waits 30 seconds for the entire embedding batch.
 GEMINI_BATCH_TIMEOUT_SECONDS = 25
+OLLAMA_OPTIONS = {"num_ctx": 8192, "num_thread": 4}
 
 
 def model_unavailable() -> ApiError:
@@ -58,7 +59,13 @@ def load_embedding_config() -> EmbeddingConfig | None:
     if not valid_provider_url(endpoint, embedding=True):
         raise ValueError("Set a valid embedding provider URL using HTTPS or explicitly enabled local HTTP.")
     revision = os.environ.get("MODEL_EMBEDDING_REVISION", "1")
-    version = hashlib.sha256(f"{endpoint}\n{model}\n{dimensions}\n{revision}".encode()).hexdigest()
+    protocol = os.environ.get("MODEL_EMBEDDING_PROTOCOL", "openai")
+    if protocol not in {"openai", "ollama"}:
+        raise ValueError("Choose openai or ollama as the embedding protocol.")
+    identity = f"{endpoint}\n{model}\n{dimensions}\n{revision}"
+    if protocol == "ollama":
+        identity += "\nollama:" + json.dumps(OLLAMA_OPTIONS, sort_keys=True) + ":truncate=false"
+    version = hashlib.sha256(identity.encode()).hexdigest()
     return EmbeddingConfig(fingerprint=version, dimensions=int(dimensions))
 
 
@@ -117,6 +124,9 @@ async def embed(data: EmbeddingBatch, request: Request) -> EmbeddingResult:
         return EmbeddingResult(vectors=[fixture_vector(item, config.dimensions) for item in data.texts])
 
     base_url = os.environ["MODEL_EMBEDDING_BASE_URL"].rstrip("/")
+    if os.environ.get("MODEL_EMBEDDING_PROTOCOL", "openai") == "ollama":
+        vectors = await fetch_embeddings(request, base_url, data.texts, config.dimensions, False, ollama=True)
+        return EmbeddingResult(vectors=vectors)
     gemini = urlsplit(base_url).hostname == "generativelanguage.googleapis.com"
     if not gemini:
         vectors = await fetch_embeddings(request, base_url, data.texts, config.dimensions, False)
@@ -142,14 +152,17 @@ async def embed(data: EmbeddingBatch, request: Request) -> EmbeddingResult:
 
 
 async def fetch_embeddings(
-    request: Request, base_url: str, texts: list[str], dimensions: int, gemini: bool,
+    request: Request, base_url: str, texts: list[str], dimensions: int, gemini: bool, *, ollama: bool = False,
 ) -> list[list[float]]:
+    payload: dict[str, object] = {"model": os.environ["MODEL_EMBEDDING_NAME"], "input": texts}
+    if ollama:
+        payload.update(options=OLLAMA_OPTIONS, dimensions=dimensions, truncate=False, keep_alive=-1)
     try:
         response = await app.state.client.post(
-            base_url + "/embeddings",
+            base_url + ("/api/embed" if ollama else "/embeddings"),
             headers={"Authorization": "Bearer " + os.environ["MODEL_EMBEDDING_API_KEY"],
                      "X-Request-ID": request_id(request)},
-            json={"model": os.environ["MODEL_EMBEDDING_NAME"], "input": texts},
+            json=payload,
         )
     except httpx.HTTPError as exc:
         raise ApiError(503, "provider_unavailable", "The embedding provider could not be reached.") from exc
@@ -158,8 +171,12 @@ async def fetch_embeddings(
     if response.status_code != 200:
         raise ApiError(503, "provider_unavailable", "The embedding provider rejected the request.")
     try:
-        rows = response.json()["data"]
-        if gemini:
+        if ollama:
+            vectors = response.json()["embeddings"]
+            if not isinstance(vectors, list) or len(vectors) != len(texts):
+                raise ValueError("Invalid Ollama embedding batch count")
+        elif gemini:
+            rows = response.json()["data"]
             # Each request has one input, so an omitted index is unambiguous.
             if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
                 raise ValueError("Expected one Gemini embedding row")
@@ -167,10 +184,11 @@ async def fetch_embeddings(
             if type(index) is not int or index != 0:
                 raise ValueError("Invalid Gemini embedding index")
         else:
+            rows = response.json()["data"]
             rows = sorted(rows, key=lambda item: item["index"])
             if [row["index"] for row in rows] != list(range(len(texts))):
                 raise ValueError("Invalid embedding batch order")
-        result = EmbeddingResult(vectors=[row["embedding"] for row in rows])
+        result = EmbeddingResult(vectors=vectors if ollama else [row["embedding"] for row in rows])
         if any(len(vector) != dimensions or not any(vector) for vector in result.vectors):
             raise ValueError("Invalid embedding dimensions or zero vector")
     except (ValueError, KeyError, TypeError, ValidationError) as exc:

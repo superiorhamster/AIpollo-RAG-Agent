@@ -135,7 +135,6 @@ class Worker:
                     WHERE run_id=:run AND lease_id=:lease AND status='running'
                 """), {"run": run["run_id"], "lease": run["lease_id"],
                        "history": json.dumps(history, ensure_ascii=False)})
-        run["history_snapshot"] = history
         return history
 
     def estimate_cost(self, system, content, tokens):

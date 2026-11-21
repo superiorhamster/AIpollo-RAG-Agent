@@ -13,8 +13,12 @@ class WorkspacePage {
     await this.page.goto('/sign-in')
     await this.page.getByLabel('Email').fill('phase03@example.com')
     await this.page.getByLabel('Password', { exact: true }).fill('Phase3!a')
+    const response = this.page.waitForResponse(result => result.request().method() === 'POST' &&
+      new URL(result.url()).pathname === '/v1/auth/login')
     await this.page.getByRole('button', { name: 'Sign in', exact: true }).click()
-    await expect(this.page).toHaveURL(/\/workspaces$/)
+    const loggedIn = await response
+    expect(loggedIn.status(), await loggedIn.text()).toBe(200)
+    await expect(this.page).toHaveURL(/\/workspaces$/, { timeout: 15000 })
     await this.page.goto('/workspaces/' + workspace)
   }
 
@@ -258,7 +262,26 @@ test('evidence table is saved and opens the cited source', async ({ page }) => {
   await assistant.getByRole('combobox', { name: 'Capability' }).selectOption('RESEARCH')
   await assistant.getByRole('combobox', { name: 'Output' }).selectOption('evidence_table')
   await assistant.getByLabel('Question or objective').fill('What is the academic source?')
+  const submitted = page.waitForResponse(response => response.request().method() === 'POST' &&
+    /\/v1\/workspaces\/[^/]+\/runs$/.test(new URL(response.url()).pathname))
   await assistant.getByRole('button', { name: 'Send' }).click()
+  const started = await submitted
+  expect(started.status(), await started.text()).toBe(202)
+  const created = await started.json()
+  let outcome: { status: string; error_code?: string; result?: {
+    kind: string; claims: { fields: Record<string, string>; citations: unknown[] }[]
+  } } | undefined
+  const runPath = new URL(started.url()).pathname + '/' + created.run_id
+  await expect.poll(async () => {
+    const response = await page.request.get(runPath)
+    expect(response.status()).toBe(200)
+    outcome = await response.json()
+    return outcome?.status
+  }, { timeout: 30000, message: 'Evidence-table run should finish successfully' }).toBe('succeeded')
+  expect(outcome?.error_code).toBeNull()
+  expect(outcome?.result?.kind).toBe('evidence_table')
+  expect(outcome?.result?.claims.some(claim => claim.citations.length > 0)).toBeTruthy()
+  expect(outcome?.result?.claims[0].fields).toHaveProperty('method')
   await assistant.getByText('Save as artifact', { exact: true }).click({ timeout: 30000 })
   await assistant.getByRole('textbox', { name: 'Shared artifact name' }).fill('Cited evidence')
   await assistant.getByRole('button', { name: 'Save artifact', exact: true }).click()

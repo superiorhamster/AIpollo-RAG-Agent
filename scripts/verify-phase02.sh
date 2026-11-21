@@ -39,7 +39,7 @@ run_api() {
     -e PHASE02_POSTGRES_PASSWORD workspace-service python - "$@" < tests/phase02/api.py
 }
 
-"${compose[@]}" up --build --wait --wait-timeout 180 web
+"${compose[@]}" up --build --wait --wait-timeout "${VERIFY_WAIT_TIMEOUT:-300}" web
 run_api
 workspace_id="$(run_api --prepare)"
 "${compose[@]}" stop minio

@@ -66,7 +66,7 @@ Compose checks as passed.
 ## Open questions
 None. The user selected Ollama in Compose and authorized one local commit.
 
-## Verification results
+## Initial verification before Docker was available
 
 Implementation is complete for review; deployment and full-stack verification remain
 pending because Docker is unavailable in this execution environment. The requested
@@ -99,3 +99,105 @@ local commit records that limitation rather than treating these checks as passed
   evaluation, real PDF/citation E2E and existing-data re-indexing have not run. They
   must pass with Docker available before deployment/merge. The CLI's default now
   previews only; operations documentation was updated to require `--apply`.
+
+## Full-stack follow-up, 2026-11-21
+
+Docker became available and the checks previously blocked above were run. The
+working checkout is now `/home/anhpd/Project/Group(personal)/RAG`; the model cache
+remains in the original path documented in README. Keep the existing chat provider.
+
+### Failures reproduced and corrected
+
+- Ask execution attempted to mutate the immutable SQLAlchemy `RowMapping` returned
+  by the real worker claim query. Remove the unnecessary assignment after persisting
+  history. A PostgreSQL-backed regression executes an Ask using that exact mapping
+  type and checks success, durable history and source citations; the test fails
+  against the original worker and passes with the fix.
+- Ollama's metadata-only probe reported ready before CPU weights were loaded. A
+  synthetic native embedding probe now warms the model and keeps it loaded before
+  Model Gateway starts. The stock image needs no added curl/Python dependency.
+- The OpenAI-compatible Ollama default CPU profile exceeded batch deadlines on this
+  machine. Add an explicit native embedding protocol with the verified 8192-token,
+  four-thread profile, no silent truncation, ordered/validated 768-dimensional
+  output and a distinct configuration fingerprint. The default OpenAI-compatible
+  adapter remains covered. Add three native-protocol tests.
+- Fresh RabbitMQ volumes could acquire a root-owned Erlang cookie from the root
+  healthcheck. Run the probe as the broker user and allow 15 seconds for diagnostics
+  during CPU-heavy parser startup; measured five-second probes falsely timed out.
+  Allow parser/test-stack startup
+  time under CPU contention. Correct Docker test/evaluation `PYTHONPATH`, avoid
+  recreating the stack for Phase 01 browser tests, retain browser artifacts, and
+  wait for explicit login/run results in browser assertions.
+- Existing-document re-indexing exposed a parser deadline configuration typo:
+  `doc_timeout` was ignored by Docling 2.150.1, leaving `document_timeout=None`.
+  One conversion returned only after 225.8 seconds, beyond ingestion's 130-second
+  request deadline. Set the intended `document_timeout=110`. Add tests against the
+  installed Docling options and rejection of partial conversion results; run them
+  in an independent parser container in Phase 03 verification. Large documents can
+  still exceed the supported processing limit and must not publish partial indexes.
+
+### Observed verification
+
+- `make bootstrap`, overlay `compose-check`, and final `make verify`: passed.
+  Nineteen long-running Compose services, including Ollama, are healthy. FinManager
+  was left running and unchanged. Test Compose projects used independent volumes
+  and were removed after their suites; the application volumes were retained.
+- `make verify-phase01`: JWT claim check 1/1, identity/workspace API tests 7/7,
+  browser flows 5/5 (45.4 seconds), including session renewal, permissions and admin.
+- `make verify-phase02`: lifecycle API checks 1/1, MinIO outage/retry and deletion
+  cancellation/cleanup checks, and PDF/DOCX browser flow 1/1 (1.1 minutes).
+- `make verify-phase03`: worker tests 10/10, PostgreSQL retry/Plan/Ask tests 9/9,
+  re-index/publication tests 3/3, accepted-Plan API execution, browser flows 7/7
+  (1.2 minutes), queued indexing, provenance, tenant filtering and vector cleanup.
+- Docker Model Gateway tests: embeddings 12/12 and completion retries 3/3. Parser
+  configuration/partial-result tests passed 2/2 against the final image. Together
+  with the worker, retry/Plan and re-index suites above, 39 targeted tests passed.
+- Qdrant evaluation: dense and hybrid Recall@10=1.0 and MRR=1.0; measured p95
+  latency 91.5 ms and 88.4 ms respectively on the synthetic evaluation corpus.
+- Overlay `verify-embedding`: two Vietnamese inputs returned 768-dimensional
+  vectors. `eval-embedding`: 12 bilingual queries, Recall@3=1.0, MRR=1.0 and
+  Top1=1.0, matching the fixture baseline with no regressed metrics; embedding time
+  was 5647.4 ms. These small synthetic corpora are regression gates, not a general
+  Vietnamese retrieval quality benchmark.
+- Overlay `verify-provider`: the configured real chat endpoint returned a grounded
+  answer with the expected citation using synthetic inputs.
+- A separate Chromium test on the running application used the real embedding and
+  chat providers: create account/workspace, upload a generated Vietnamese PDF,
+  await successful indexing, search only the selected source, Ask and follow-up in
+  one conversation, then click a citation and assert the correct PDF page rendered.
+  Passed in 31.6 seconds and passed again against the final parser image in 2.6
+  minutes, including broker recovery after recreation/reprovisioning. Service-user
+  AMQP authentication was also verified directly. Its search request uses a
+  45-second test deadline; the
+  initial 8-second test request timeout was corrected without changing production
+  deadlines. The synthetic workspace was deleted and test sessions revoked.
+- Web TypeScript check, production Next build, shell syntax checks, migration
+  preservation test and `git diff --check`: passed. No dependencies were added.
+
+### Existing-data migration and handoff
+
+Re-index dry run selected eight eligible index jobs across five workspaces. Applied
+the migration through the ingestion-owned CLI, retaining old published indexes.
+Six succeeded using the current local-model fingerprint. The other two initially
+exhausted dependency retries with the old parser; after retrying only those two
+against the corrected parser, both ended in explicit `parse_failed` responses.
+Measured parse times were 115.1 and 111.6 seconds with HTTP 422, confirming the
+processing deadline is enforced. No index jobs remain queued or running. Those
+two sources are retained for preview but have not migrated to searchable vectors
+for the new model; existing-data migration is therefore **6/8 complete**. Supporting
+these slower documents needs separate parser performance/processing-budget work.
+
+The final bootstrap and host web/API readiness checks passed after all runtime
+fixes. Reviewed the intended staged diff with `git diff --cached` and
+`git diff --cached --check`; `.env`, model weights, generated browser artifacts and
+raw logs are excluded. Persisted only the model-cache path in the private `.env`
+so the documented overlay commands work without a shell-only override.
+
+Local runtime/evaluation logs are in `/tmp/aipollo-full-*.log`; browser artifacts are
+under ignored `test-results/`. The passing Phase 01 and Phase 03 artifact folders
+end in `417116-31369` and `481914-24530`; the real-provider browser result is
+`test-results/live-embedding-final/.last-run.json`. A copy of the synthetic test is
+saved beside that result as `verification.spec.ts`. Raw failure logs/traces can
+contain disposable test credentials and must not be committed or shared unredacted.
+The temporary PostgreSQL regression server was stopped. Keep the application stack
+running. No remote push or merge was performed.
