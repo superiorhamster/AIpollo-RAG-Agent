@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from rag_telemetry import operation
+from rag_runtime import RuntimeBudgets
 from rag_index import EMBED_BATCH, MAX_CHUNKS, MAX_PDF_BYTES, Chunk, EmbeddingConfig, EmbeddingResult, IndexBatch
 
 LOG = logging.getLogger(__name__)
@@ -28,6 +29,11 @@ class FailedSource(Exception):
 
 class RemovedSource(Exception):
     pass
+
+
+class ParserBusy(Exception):
+    def __init__(self, delay: int):
+        self.delay = delay
 
 
 class MissingModel(Exception):
@@ -46,6 +52,7 @@ class IndexJob:
 
 class IndexWorker:
     def __init__(self, database: AsyncEngine, client: httpx.AsyncClient, document_token: str):
+        self.budgets = RuntimeBudgets.from_env()
         self.database = database
         self.client = client
         self.document_token = document_token
@@ -86,10 +93,10 @@ class IndexWorker:
                     ) ORDER BY j.next_attempt, j.job_id LIMIT 1 FOR UPDATE SKIP LOCKED
                 )
                 UPDATE ingestion.jobs j SET status = 'running', lease_id = :lease, error_code = NULL,
-                    lease_until = now() + interval '6 minutes', attempts = j.attempts + 1, updated_at = now()
+                    lease_until = now() + make_interval(secs => :lease_seconds), attempts = j.attempts + 1, updated_at = now()
                 FROM candidate WHERE j.job_id = candidate.job_id
                 RETURNING j.job_id, j.workspace_id, j.document_id, j.request_id, j.lease_id, j.attempts
-            """), {"lease": uuid4()})
+            """), {"lease": uuid4(), "lease_seconds": self.budgets.index + 60})
             selected = result.mappings().one_or_none()
             return IndexJob(**selected) if selected else None
 
@@ -110,13 +117,16 @@ class IndexWorker:
                     raise FailedSource("file_too_large")
                 data.extend(piece)
         parsed = await self.client.post(
-            "http://document-parser:8000/internal/v1/parse", content=bytes(data), timeout=130,
+            "http://document-parser:8000/internal/v1/parse", content=bytes(data), timeout=self.budgets.parse_caller,
             headers={**request_headers, "Content-Type": "application/pdf"},
         )
         if parsed.status_code in (413, 415, 422):
             code = parsed.json().get("code")
-            accepted = ("no_text", "too_many_chunks", "file_too_large")
+            accepted = ("no_text", "too_many_chunks", "file_too_large", "parse_timeout")
             raise FailedSource(code if code in accepted else "parse_failed")
+        if parsed.status_code == 503 and parsed.json().get("code") == "parser_busy":
+            retry = parsed.headers.get("Retry-After", "5")
+            raise ParserBusy(min(self.budgets.parse_wall, int(retry)) if retry.isdecimal() else 5)
         parsed.raise_for_status()
         chunks = chunk_list.validate_json(parsed.content)
         if not chunks or len(chunks) > MAX_CHUNKS:
@@ -125,7 +135,7 @@ class IndexWorker:
 
     async def embed(self, job: IndexJob, config: EmbeddingConfig, texts: list[str]) -> list[list[float]]:
         response = await self.client.post(
-            "http://model-gateway:8000/internal/v1/embeddings", timeout=30,
+            "http://model-gateway:8000/internal/v1/embeddings", timeout=self.budgets.embedding_caller,
             headers={"X-Embedding-Service-Token": self.embedding_token, "X-Request-ID": str(job.request_id)},
             json={"texts": texts, "fingerprint": config.fingerprint},
         )
@@ -168,13 +178,13 @@ class IndexWorker:
 
     async def run(self, job: IndexJob, config: EmbeddingConfig) -> None:
         try:
-            async with asyncio.timeout(330):
+            async with asyncio.timeout(self.budgets.index):
                 chunks = await self.read_chunks(job)
                 serialized = json.dumps([chunk.model_dump(mode="json") for chunk in chunks], ensure_ascii=False)
                 version = hashlib.sha256(serialized.encode()).hexdigest()
                 generation = uuid5(job.document_id, f"{INDEX_REVISION}:{config.fingerprint}:{version}")
-                for offset in range(0, len(chunks), EMBED_BATCH):
-                    selected = chunks[offset:offset + EMBED_BATCH]
+                for offset in range(0, len(chunks), self.budgets.batch):
+                    selected = chunks[offset:offset + self.budgets.batch]
                     texts = [f"{chunk.section}\n{chunk.text}"[:1800] if chunk.section else chunk.text
                              for chunk in selected]
                     vectors = await self.embed(job, config, texts)
@@ -182,13 +192,24 @@ class IndexWorker:
                                        vectors=vectors)
                     await self.publish(job, batch, offset + len(selected) == len(chunks))
             return
+        except asyncio.CancelledError:
+            try:
+                await self.release(job)
+            except Exception as exc:
+                LOG.warning("Could not release interrupted index lease (%s)", type(exc).__name__)
+            raise
+        except ParserBusy as exc:
+            status = "queued" if job.attempts < 3 else "failed"
+            code, delay, restore_attempt = "parser_busy", max(1, exc.delay), False
         except RemovedSource:
             status, code, delay, restore_attempt = "cancelled", None, 0, False
         except MissingModel:
             status, code, delay, restore_attempt = "queued", "model_unavailable", 60, True
         except FailedSource as exc:
             status, code, delay, restore_attempt = "failed", exc.code, 0, False
-        except (httpx.HTTPError, ValidationError, TimeoutError, ValueError):
+        except TimeoutError:
+            status, code, delay, restore_attempt = "failed", "index_timeout", 0, False
+        except (httpx.HTTPError, ValidationError, ValueError):
             status = "queued" if job.attempts < 3 else "failed"
             code, delay, restore_attempt = "index_dependency_unavailable", 4 ** job.attempts, False
 
@@ -200,6 +221,16 @@ class IndexWorker:
                 WHERE job_id = :job AND lease_id = :lease AND status = 'running'
             """), {"status": status, "error": code, "restore_attempt": int(restore_attempt),
                    "delay": delay, "job": job.job_id, "lease": job.lease_id})
+
+    async def release(self, job: IndexJob) -> None:
+        """Return only this lease's unfinished work; never resurrect deleted jobs."""
+        async with self.database.begin() as connection:
+            await connection.execute(text("""
+                UPDATE ingestion.jobs SET status='queued', attempts=GREATEST(0, attempts-1),
+                    next_attempt=now(), lease_id=NULL, lease_until=NULL,
+                    error_code='worker_interrupted', updated_at=now()
+                WHERE job_id=:job AND lease_id=:lease AND status='running'
+            """), {"job": job.job_id, "lease": job.lease_id})
 
     async def index_loop(self) -> None:
         while True:

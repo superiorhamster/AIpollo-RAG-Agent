@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import httpx
+from rag_runtime import RuntimeBudgets
 
 from app.main import fixture_vector
 
@@ -38,14 +39,15 @@ def evaluate(base_url):
     corpus = json.loads(Path(__file__).with_name("corpus-v1.json").read_text())
     docs, queries = corpus["documents"], corpus["queries"]
     headers = {"X-Embedding-Service-Token": os.environ["MODEL_EMBEDDING_TOKEN"]}
-    with httpx.Client(base_url=base_url, headers=headers, timeout=30, trust_env=False) as client:
+    with httpx.Client(base_url=base_url, headers=headers, timeout=RuntimeBudgets.from_env().embedding_caller, trust_env=False) as client:
         config = client.get("/embedding-config").raise_for_status().json()
         started = time.perf_counter()
 
         def embed(texts):
             vectors = []
-            for offset in range(0, len(texts), 16):
-                batch = texts[offset:offset + 16]
+            size = 1 if os.environ.get("MODEL_EMBEDDING_PROTOCOL") == "ollama" else 16
+            for offset in range(0, len(texts), size):
+                batch = texts[offset:offset + size]
                 response = client.post("/embeddings", json={"texts": batch, "fingerprint": config["fingerprint"]})
                 result = response.raise_for_status().json()["vectors"]
                 if (len(result) != len(batch) or any(len(v) != config["dimensions"] for v in result)

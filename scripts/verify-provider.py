@@ -6,10 +6,11 @@ from uuid import uuid4
 
 import httpx
 
+from rag_runtime import RuntimeBudgets
 from rag_index import EmbeddingConfig, EmbeddingResult
 
 if os.environ.get("MODEL_PROVIDER") != "openai-compatible":
-    raise SystemExit("Configure the hosted provider before running the provider smoke test.")
+    raise SystemExit("Configure embedding and chat providers before running the provider smoke test.")
 
 identifier = str(uuid4())
 source = "Synthetic smoke test. A controlled sample contains exactly seven observations."
@@ -22,7 +23,7 @@ with httpx.Client(base_url="http://127.0.0.1:8000/internal/v1", timeout=35, trus
     config = EmbeddingConfig.model_validate_json(response.raise_for_status().content)
     response = client.post("/embeddings", headers=embed_headers, json={
         "texts": [source], "fingerprint": config.fingerprint,
-    })
+    }, timeout=RuntimeBudgets.from_env().embedding_caller)
     vectors = EmbeddingResult.model_validate_json(response.raise_for_status().content).vectors
     if len(vectors) != 1 or len(vectors[0]) != config.dimensions:
         raise SystemExit("The provider returned an unexpected embedding shape.")
@@ -41,4 +42,4 @@ with httpx.Client(base_url="http://127.0.0.1:8000/internal/v1", timeout=35, trus
     data = json.loads(answer)
     if data.get("observations") != 7 or data.get("source_id") != identifier:
         raise SystemExit("The chat provider did not preserve the synthetic evidence.")
-print("Hosted embedding dimensions and citation-bearing chat response verified with synthetic data.")
+print("Configured embedding dimensions and citation-bearing chat response verified with synthetic data.")
