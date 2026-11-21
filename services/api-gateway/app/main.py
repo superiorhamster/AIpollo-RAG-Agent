@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from redis.exceptions import RedisError
 
+from rag_runtime import RuntimeBudgets
 from rag_telemetry import propagate_trace
 from rag_http import (
     ACCESS_COOKIE, ACCESS_FORMAT, REFRESH_COOKIE, REFRESH_FORMAT,
@@ -81,6 +82,7 @@ class RejectUpstreamCookies(DefaultCookiePolicy):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    RuntimeBudgets.from_env()  # Reject invalid deadline combinations before serving traffic.
     origin = os.environ["WEB_ORIGIN"]
     parsed = urlsplit(origin)
     if parsed.scheme not in ("http", "https") or not parsed.hostname or origin != f"{parsed.scheme}://{parsed.netloc}":
@@ -223,8 +225,10 @@ async def proxy(request: Request, path: str) -> Response:
             timeout = httpx.Timeout(120, connect=5)
         elif path.startswith("auth/password-reset") or path.startswith("admin/") or path.endswith("/references/discover"):
             timeout = httpx.Timeout(14, connect=5)
+        elif path.endswith("/jobs"):
+            timeout = httpx.Timeout(15, connect=5)
         elif search or stream:
-            timeout = httpx.Timeout(60 if search else 15, connect=5)
+            timeout = httpx.Timeout(RuntimeBudgets.from_env().search_caller if search else 15, connect=5)
         outbound = app.state.client.build_request(
             method, f"{upstream}/v1/{path}", headers=headers, content=body,
             timeout=timeout,

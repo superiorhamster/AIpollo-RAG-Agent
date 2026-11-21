@@ -231,6 +231,18 @@ class RetryApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["result"]["claims"][0]["citations"], [citation])
         self.assertIsNone(run["history_snapshot"])
 
+    async def test_invalid_generation_retry_preserves_scope_and_snapshot(self):
+        original = await self.seed(error="invalid_model_output", snapshot=[])
+        response = await self.client.get(self.route + '/' + str(original))
+        self.assertTrue(response.json()['retryable'])
+        self.assertEqual(response.json()['error_code'], 'invalid_model_output')
+        retried = await self.retry(original)
+        self.assertEqual(retried.status_code, 202, retried.text)
+        saved = await self.stored(retried.json()['run_id'])
+        self.assertEqual(saved['history_snapshot'], [])
+        self.assertEqual(saved['retry_of_run_id'], original)
+        self.assertEqual(saved['user_id'], self.user)
+
 
 if __name__ == "__main__":
     unittest.main()

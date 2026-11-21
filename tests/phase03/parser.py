@@ -7,17 +7,18 @@ from unittest.mock import patch
 
 from docling.datamodel.base_models import ConversionStatus, InputFormat
 
-from app.main import converter, parse_pdf
+from app.conversion import converter, parse_pdf
+from rag_runtime import RuntimeBudgets
 from rag_http import ApiError
 
 
 class ParserDeadline(unittest.TestCase):
     def test_docling_recognizes_the_document_deadline(self):
         options = converter.format_to_options[InputFormat.PDF].pipeline_options
-        self.assertEqual(options.document_timeout, 110)
+        self.assertEqual(options.document_timeout, RuntimeBudgets.from_env().parse)
 
     def test_partial_conversion_is_not_published_as_a_complete_source(self):
-        with patch.object(converter, "convert", return_value=SimpleNamespace(status=ConversionStatus.PARTIAL_SUCCESS)):
+        with patch.object(converter, "convert", return_value=SimpleNamespace(status=ConversionStatus.PARTIAL_SUCCESS, has_timeout_errors=lambda: False)):
             with self.assertRaises(ApiError) as caught:
                 parse_pdf(BytesIO(b"%PDF-synthetic"))
         self.assertEqual(caught.exception.status_code, 422)

@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import httpx
 
+from app.generation import REPAIR
 from app.ask_prompts import ANSWER_SYSTEM, REWRITE_SYSTEM
 from app.types import Answer, GeneratedAnswer, GeneratedAskAnswer
 from app.worker import ASK_COMPLETION_UNAVAILABLE, StopRun, Worker
@@ -99,7 +100,7 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
         self.database.rows.append(run)
         return run
 
-    async def turn(self, question, passages, claims, history=(), *, standalone=None, fallback=None, new_thread=False):
+    async def turn(self, question, passages, claims, history=(), *, standalone=None, fallback=None, new_thread=False, repaired=None):
         run = self.new_run(question, new_thread)
         stages = []
 
@@ -124,21 +125,21 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
             else:
                 stages.append("compose")
                 self.assertTrue(payload["retry_on_unavailable"])
-                self.assertEqual(system["content"], ANSWER_SYSTEM)
+                self.assertIn(system["content"], (ANSWER_SYSTEM, ANSWER_SYSTEM + REPAIR))
                 self.assertEqual(inputs, {
                     "task": "answer", "fields": [], "objective": question, "capability": "LEARN",
                     "history": list(history), "evidence": [
                         {"id": p["chunk_id"], "text": p["text"], "section": p["section"]} for p in passages
                     ],
                 })
-                output = json.dumps({"claims": claims})
+                output = json.dumps({"claims": repaired if system["content"].endswith(REPAIR) and repaired is not None else claims})
             return httpx.Response(200, json={"text": output})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
             await Worker(self.database, client).execute(run)
         self.assertEqual(run["status"], "succeeded", run.get("error"))
         self.assertEqual(stages, (["rewrite"] if history else []) + ["retrieve"] +
-                         (["compose"] if passages or history else []))
+                         (["compose"] * (2 if repaired is not None else 1) if passages or history else []))
         self.assertEqual(run["input"]["query"], question)
         return run["result"]
 
@@ -182,7 +183,7 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
         mixed = await self.turn("Demo lúc nào và tôi gọi là gì?", [SCHEDULE],
                                [claim("14:00 thứ Sáu.", SCHEDULE), claim("Bạn gọi nó là Mây Tím."),
                                 claim("Không có căn cứ.", CHECKLIST)],
-                               [{"question": seed, "answer": ""}])
+                               [{"question": seed, "answer": ""}], repaired=[claim("14:00 thứ Sáu.", SCHEDULE), claim("Bạn gọi nó là Mây Tím.")])
         self.assertEqual([c["citations"] for c in mixed["claims"]], [[SCHEDULE], []])
         for schema in (GeneratedAnswer, GeneratedAskAnswer):
             with self.assertRaises(ValueError):
@@ -213,7 +214,7 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
             worker = Worker(self.database, client)
             for status, expected in ((503, ASK_COMPLETION_UNAVAILABLE), (502, "interaction_unavailable"),
-                                     (200, "interaction_unavailable")):
+                                     (200, "invalid_model_output")):
                 run = self.new_run(Q1, new_thread=True)
                 await worker.execute(run)
                 self.assertEqual((run["status"], run["error"]), ("failed", expected))
@@ -272,6 +273,46 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
             await worker.compose(self.new_run(Q1), [SCHEDULE], [], 1)
         self.assertEqual(caught.exception.code, "cost_limit")
         worker.complete.assert_not_called()
+    async def test_generation_repair_validates_envelope_uuid_and_provenance(self):
+        good = json.dumps({"claims": [claim("14:00 thứ Sáu.", SCHEDULE)]})
+        invalid = [
+            'Here is the answer: ' + good,
+            json.dumps({"claims": [{"text": "private-output-sentinel", "evidence": ["EX_SCHEDULE"]}]}),
+            json.dumps({"claims": [claim("Wrong source", CHECKLIST)]}),
+            json.dumps({"claims": [{"text": "Unsupported", "source": "document", "evidence": []}]}),
+        ]
+        def upstream(request):
+            if request.url.host == 'retrieval-service':
+                return httpx.Response(200, json={'evidence': [SCHEDULE]})
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            for broken in invalid:
+                run = self.new_run(Q1, new_thread=True)
+                worker = Worker(self.database, client)
+                worker.complete = AsyncMock(side_effect=[broken, '```json\n' + good + '\n```'])
+                with self.assertLogs('app.worker', level='WARNING') as captured:
+                    await worker.execute(run)
+                self.assertNotIn('private-output-sentinel', '\n'.join(captured.output))
+                self.assertEqual(worker.complete.await_count, 2)
+                self.assertEqual(run['status'], 'succeeded', run.get('error'))
+                self.assertEqual(run['result']['claims'][0]['citations'], [SCHEDULE])
+
+    async def test_repair_does_not_exceed_the_cost_budget(self):
+        def upstream(request):
+            if request.url.host == 'retrieval-service':
+                return httpx.Response(200, json={'evidence': [SCHEDULE]})
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            run = self.new_run(Q1, new_thread=True)
+            worker = Worker(self.database, client)
+            worker.budget = 1
+            worker.input_cost = worker.output_cost = 1
+            worker.estimate_cost = lambda *_args: 1
+            worker.complete = AsyncMock(return_value='invalid')
+            await worker.execute(run)
+            self.assertEqual(worker.complete.await_count, 1)
+            self.assertEqual(run['error'], 'cost_limit')
+
 
 if __name__ == "__main__":
     unittest.main()

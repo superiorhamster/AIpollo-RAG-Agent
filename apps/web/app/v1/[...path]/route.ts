@@ -17,13 +17,15 @@ async function relay(request: Request, context: Context): Promise<Response> {
   const file = path[2] === 'documents' && ['preview', 'original'].includes(path[4])
   const remote = path[0] === 'admin' || path[1] === 'password-reset'
   const discovery = path[2] === 'references' && path[3] === 'discover'
+  const jobs = path[2] === 'documents' && path[4] === 'jobs'
+  const searchTimeout = (Number(process.env.MODEL_EMBEDDING_TIMEOUT_SECONDS ?? '60') + 60) * 1000
   const events = path.length === 5 && path[2] === "runs" && path[4] === "events"
   const options: RequestInit & { duplex?: 'half' } = {
     method: request.method,
     headers,
     cache: 'no-store',
     redirect: 'manual',
-    signal: AbortSignal.timeout(upload ? 130000 : file ? 120000 : (search || events) ? 65000 : (discovery || remote) ? 18000 : 8000),
+    signal: AbortSignal.timeout(upload ? 130000 : file ? 120000 : search ? searchTimeout : events ? 65000 : jobs ? 20000 : (discovery || remote) ? 18000 : 8000),
   }
   if (request.body !== null) {
     options.body = request.body

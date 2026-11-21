@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { mapConcurrent } from '../../lib/polling'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { AccountMenu } from '../../components/account-menu'
@@ -74,6 +75,8 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
   const [busy, setBusy] = useState(false)
   const [fileName, setFileName] = useState('')
   const [error, setError] = useState('')
+  const [pollError, setPollError] = useState(false)
+  const [openedArtifact, setOpenedArtifact] = useState<string>()
   const uploadKey = useRef<string | null>(null)
   const uploadForm = useRef<HTMLFormElement>(null)
   const reader = useRef<HTMLElement>(null)
@@ -86,6 +89,9 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
     if (!documents.length) return
     let active = true
     let timer: ReturnType<typeof setTimeout>
+    let delay = 1500
+    const controller = new AbortController()
+    const poll = async <T,>(path: string): Promise<T> => readResponse<T>(await authenticatedFetch(path, { signal: controller.signal }))
 
     async function pollJobs() {
       const pendingDocs = documents.filter(doc => {
@@ -98,13 +104,11 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
       if (!pendingDocs.length) return
 
       try {
-        const updates = await Promise.all(
-          pendingDocs.map(async doc => {
+        const updates = await mapConcurrent(pendingDocs, async doc => {
+            if (!active) return null
             try {
-              const [updatedDoc, jobs] = await Promise.all([
-                doc.preview_ready ? doc : api<DocumentItem>(`${base}/${doc.document_id}`),
-                api<Job[]>(`${base}/${doc.document_id}/jobs`),
-              ])
+              const updatedDoc = doc.preview_ready ? doc : await poll<DocumentItem>(`${base}/${doc.document_id}`)
+              const jobs = await poll<Job[]>(`${base}/${doc.document_id}/jobs`)
               const previewStatus = jobs.find(j => j.kind === 'preview')?.status ?? (updatedDoc.preview_ready ? 'succeeded' : 'queued')
               const indexJob = jobs.find(j => j.kind === 'index')
               const failure = jobs.find(job => job.status === 'failed')
@@ -117,9 +121,11 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
               return null
             }
           })
-        )
 
         if (!active) return
+        const incomplete = updates.some(item => item === null)
+        setPollError(incomplete)
+        delay = incomplete ? Math.min(15000, delay * 2) : 1500
 
         let docsChanged = false
         const nextDocs = [...documents]
@@ -150,16 +156,21 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
         })
 
         if (active && stillPending) {
-          timer = setTimeout(pollJobs, 1500)
+          timer = setTimeout(pollJobs, delay)
         }
       } catch {
-        // Continue
+        if (active) {
+          setPollError(true)
+          delay = Math.min(15000, delay * 2)
+          timer = setTimeout(pollJobs, delay)
+        }
       }
     }
 
     void pollJobs()
     return () => {
       active = false
+      controller.abort()
       clearTimeout(timer)
     }
   }, [base, documents, router])
@@ -274,6 +285,7 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
     if (jobs?.preview === 'failed') return 'failed'
     return jobs?.index ?? jobs?.preview ?? 'queued'
   }
+  const readySources = documents.filter(doc => sourceState(doc) === 'succeeded').map(doc => doc.document_id)
   const selectedPreviewJob = selectedDoc && documentJobs[selectedDoc.document_id]?.preview
   function openCitation(target: CitationTarget) {
     select(target.document_id, target.page, true)
@@ -340,7 +352,7 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
                 const checked = selectedSources.includes(doc.document_id)
                 const state = sourceState(doc)
                 return <label className="workspace-source" key={doc.document_id} data-checked={checked}>
-                  <input type="checkbox" aria-label={doc.name} checked={checked}
+                  <input type="checkbox" aria-label={doc.name} checked={checked} disabled={state !== 'succeeded'}
                     onChange={event => updateSource(doc.document_id, event.currentTarget.checked)} />
                   <DesignIcon name="file" /><span className="source-name" title={doc.name}>{doc.name}</span>
                   {state !== 'succeeded' && <span className={'badge badge-' + jobColors[state]}>{text(filters[state], vietnameseFilters[state])}</span>}
@@ -361,9 +373,12 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
               onClick={() => setReaderVisible(true)}><DesignIcon name="panel" /> Show reader</button>}
             <div className="workspace-chat" hidden={view !== 'chats' && view !== 'history'}>
               <InteractionPanel workspaceId={workspace.workspace_id} workspaceName={workspace.name}
-                documents={documents} selectedSources={selectedSources} setSelectedSources={setSelectedSources}
+                documents={documents} readySources={readySources} selectedSources={selectedSources} setSelectedSources={setSelectedSources}
                 onSourcesLock={setSourcesLocked} showHistory={view === 'history'}
-                canPublish={mayWrite} onCitation={openCitation} />
+                canPublish={mayWrite} onCitation={openCitation} onOpenArtifact={id => {
+                  setOpenedArtifact(id)
+                  navigate('artifacts')
+                }} />
             </div>
 
             <section className="aipollo-library form-stack" hidden={view !== 'library'} aria-labelledby="documents-heading">
@@ -391,6 +406,7 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
                 </div>}
               </form>}
               {error && view === 'library' && <p role="alert"><DesignIcon name="error" /> {error}</p>}
+              {pollError && <p role="alert">{text('Could not update document status. Retrying with backoff.', 'Chưa cập nhật được trạng thái tài liệu. Hệ thống sẽ thử lại.')}</p>}
               <div className="library-filters" aria-label="Filter source status">
                 {Object.entries(filters).map(([value, label]) => {
                   const count = value === 'all' ? documents.length : documents.filter(doc => sourceState(doc) === value).length
@@ -401,15 +417,16 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
               </div>
               <div className="aipollo-table-scroll">
                 <table className="aipollo-table">
-                  <thead><tr><th scope="col">{text('Name', 'Tên')}</th><th scope="col">{text('Type', 'Loại')}</th><th scope="col">{text('State', 'Trạng thái')}</th><th scope="col">{text('Action', 'Thao tác')}</th></tr></thead>
+                  <thead><tr><th scope="col">{text('Name', 'Tên')}</th><th scope="col">{text('Type', 'Loại')}</th><th scope="col">{text('Preview', 'Xem trước')}</th><th scope="col">{text('AI index', 'Chỉ mục AI')}</th><th scope="col">{text('Action', 'Thao tác')}</th></tr></thead>
                   <tbody>{documents.filter(doc => filter === 'all' || sourceState(doc) === filter).map(doc => {
                     const state = sourceState(doc)
                     return <tr key={doc.document_id}>
                       <th scope="row"><span className="aipollo-table-file"><DesignIcon name="file" /> {doc.name}</span></th>
                       <td>{doc.filename.toLowerCase().endsWith('.docx') ? 'DOCX' : 'PDF'}</td>
+                      <td>{doc.preview_ready ? text('Ready to view', 'Có thể xem') : text('Preparing preview', 'Đang chuẩn bị')}</td>
                       <td><span className={'badge badge-' + jobColors[state]}>{text(filters[state], vietnameseFilters[state])}</span>
                         {documentJobs[doc.document_id]?.error && <div className="muted">
-                          {documentJobs[doc.document_id].error?.replaceAll('_', ' ')}
+                          {documentJobs[doc.document_id].error === 'parse_timeout' ? text('Processing time limit exceeded. Preview remains available.', 'Vượt thời gian xử lý. Bạn vẫn có thể xem tài liệu.') : documentJobs[doc.document_id].error === 'no_text' ? text('No text found. Scanned PDFs need OCR, which is not enabled.', 'Không tìm thấy văn bản. PDF scan cần OCR, hiện chưa hỗ trợ.') : documentJobs[doc.document_id].error?.replaceAll('_', ' ')}
                         </div>}</td>
                       <td>{doc.preview_ready && <button type="button" className="secondary sm" aria-label={'Open ' + doc.name}
                         onClick={() => select(doc.document_id)}>{text('Open', 'Mở')}</button>}</td>
@@ -422,12 +439,12 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
                 <p className="muted">No sources with this status.</p>}
               {!!documents.length && <details className="library-source-search">
                 <summary><DesignIcon name="search" /> {text('Search sources', 'Tìm trong các nguồn')}</summary>
-                <SourceSearch workspaceId={workspace.workspace_id} documents={documents} onCitation={openCitation} />
+                <SourceSearch workspaceId={workspace.workspace_id} documents={documents.filter(doc => readySources.includes(doc.document_id))} onCitation={openCitation} />
               </details>}
             </section>
 
             <div className="library-academic" hidden={view !== 'artifacts' && view !== 'references'}>
-              <AcademicLibrary workspace={workspace} view={view === 'references' || view === 'artifacts' ? view : undefined} onCitation={openCitation} />
+              <AcademicLibrary openedArtifact={openedArtifact} workspace={workspace} view={view === 'references' || view === 'artifacts' ? view : undefined} onCitation={openCitation} />
             </div>
             {view === 'notes' && <section className="form-stack">
               <header className="aipollo-section-heading"><div><h1>{text('Notes', 'Ghi chú')}</h1><p>{workspace.name}</p></div></header>
@@ -453,7 +470,7 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
               </button>
             </div>
             {selectedDoc ? <>
-              <details className="reader-file-menu" key={selectedDoc.document_id}>
+              <details className="reader-file-menu" key={'file-menu-' + selectedDoc.document_id}>
                 <summary><h2>{selectedDoc.name}</h2></summary>
                 <div className="actions">
                   <button type="button" className="secondary sm" disabled={busy}
@@ -468,9 +485,9 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
                 </form>}
               </details>
               {error && view !== 'library' && <p role="alert"><DesignIcon name="error" /> {error}</p>}
-              {selectedDoc.preview_ready ? <AnnotatedPreview key={selectedDoc.document_id}
+              {selectedDoc.preview_ready ? <AnnotatedPreview key={'preview-' + selectedDoc.document_id}
                 documentUrl={base + '/' + selectedDoc.document_id} page={page}
-                citation={citation}
+                citation={citation} onClearCitation={() => setCitation(current => current ? { ...current, region: undefined } : undefined)}
                 onPage={next => select(selectedDoc.document_id, next, false)} /> : (
                 <p role="status" className="reader-empty">{selectedPreviewJob === 'failed' ? 'Preview could not be generated.'
                   : selectedPreviewJob === 'cancelled' ? 'Preview was cancelled.'

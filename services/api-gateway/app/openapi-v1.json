@@ -6415,7 +6415,8 @@
                 "type": "null"
               }
             ],
-            "title": "Error Code"
+            "title": "Error Code",
+            "description": "Stable failure code. invalid_model_output means generation failed schema or current-evidence validation after one bounded regeneration; eligible failed Ask runs can be retried without changing their context."
           },
           "retryable": {
             "type": "boolean",
@@ -6851,7 +6852,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Processing failure code, including parse_timeout (terminal), no_text (OCR not enabled), parser_busy (bounded retry), and index_timeout. Preview readiness is independent of indexing."
           },
           "updated_at": {
             "type": "string",

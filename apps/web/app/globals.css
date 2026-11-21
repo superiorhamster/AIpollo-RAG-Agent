@@ -1433,6 +1433,34 @@ ol.plan-steps li .badge, .run-stages li .badge { margin-left: auto; }
 .reader-annotations textarea { border: 0; padding: 2px 0; font-size: 13px; }
 
 .artifact-library[hidden] { display: none; }
+
+.global-language { position: absolute; top: 12px; right: 64px; z-index: 20; }
+.password-checks { list-style: none; margin: 0; padding: 0; color: var(--muted); font-size: 13px; }
+.password-checks li[data-met="true"] { color: var(--success); }
+.pdf-controls { flex-shrink: 0; }
+.pdf-page-jump { display: flex; align-items: center; gap: 4px; margin: 0; }
+.pdf-page-jump label { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+.pdf-page-jump input { width: 4.5rem; padding: 3px 5px; min-height: 28px; }
+.pdf-paper { min-width: 0; overscroll-behavior: contain; }
+.pdf-paper:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (max-width: 1024px) {
+  .aipollo-workspace { height: calc(100dvh - 60px); min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .aipollo-workspace > .workspace-tab-nav { flex: 0 0 auto; }
+  .aipollo-workspace .workspace-body { flex: 1; min-height: 0; overflow: hidden; }
+  .aipollo-workspace .workspace-center[data-mobile-active="true"] { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .workspace-compact-nav { flex-shrink: 0; }
+  .workspace-chat:not([hidden]) { flex: 1; min-height: 0; overflow: hidden; }
+  .aipollo-assistant { height: 100%; min-height: 0; gap: 8px; }
+  .aipollo-assistant > header, .aipollo-assistant > .assistant-heading-badges { flex-shrink: 0; }
+  .assistant-thread { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 8px; }
+  .assistant-composer { position: static; flex-shrink: 0; margin: 0; padding: 8px; }
+  .assistant-composer textarea { min-height: 36px; max-height: 80px; resize: none; }
+  .composer-mobile-sources { max-height: 100px; overflow: auto; }
+  .workspace-reader[data-mobile-active="true"] { height: 100%; min-height: 0; overflow: auto; }
+  .workspace-reader .pdf-controls { min-height: 36px; height: auto; position: static; }
+  .workspace-center > .aipollo-library, .workspace-center > .library-academic:not([hidden]) { overflow: auto; }
+}
 .artifact-tabs { padding: 4px; background: var(--canvas-subtle); border-radius: 9px; }
 .artifact-tabs button[aria-pressed="true"] { background: var(--surface); }
 .evidence-table tbody td { width: 25%; }

@@ -13,7 +13,7 @@ export type Workspace = {
 export type Member = { user_id: string; role: 'EDITOR' | 'VIEWER' }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public code?: string, public retryAfter?: number) {
     super(message)
   }
 }
@@ -26,8 +26,10 @@ export class RenewalUnconfirmed extends ApiError {
 
 export async function readResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    const body = await response.json().catch(() => null) as { message?: string } | null
-    throw new ApiError(response.status, body?.message ?? 'The service is temporarily unavailable.')
+    const body = await response.json().catch(() => null) as { message?: string; code?: string } | null
+    const retry = Number(response.headers.get('Retry-After'))
+    throw new ApiError(response.status, body?.message ?? 'The service is temporarily unavailable.', body?.code,
+      Number.isFinite(retry) && retry > 0 ? retry : undefined)
   }
   if (response.status === 204 || (response.status === 202 && !response.headers.has('content-type'))) {
     return undefined as T

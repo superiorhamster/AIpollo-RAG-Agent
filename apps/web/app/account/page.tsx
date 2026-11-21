@@ -1,3 +1,4 @@
+import { Localized } from '../components/workspace-language'
 import Link from 'next/link'
 import { ArrowLeft, User, Shield, ExternalLink } from 'lucide-react'
 import { AccountMenu } from '../components/account-menu'
@@ -20,15 +21,15 @@ export default async function AccountPage() {
             style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', textDecoration: 'none' }}
           >
             <ArrowLeft size={16} aria-hidden="true" />
-            <span>Back to workspaces</span>
+            <span><Localized en="Back to workspaces" vi="Về không gian làm việc"/></span>
           </Link>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
-          <h1>Account</h1>
+          <h1><Localized en="Account" vi="Tài khoản"/></h1>
           <span className={`badge ${isAdmin ? 'badge-primary' : 'badge-neutral'}`}>
             {isAdmin ? <Shield size={13} aria-hidden="true" /> : <User size={13} aria-hidden="true" />}
-            <span>{isAdmin ? 'Administrator' : 'Researcher'}</span>
+            <span>{isAdmin ? <Localized en="Administrator" vi="Quản trị viên"/> : <Localized en="Researcher" vi="Người nghiên cứu"/>}</span>
           </span>
         </div>
 
@@ -36,7 +37,7 @@ export default async function AccountPage() {
           <div style={{ paddingBottom: '0.75rem', borderBottom: '1px solid var(--line)' }}>
             <p style={{ fontWeight: 600, fontSize: '1.05rem', color: 'var(--ink)' }}>{account.email}</p>
             <p className="muted" style={{ marginTop: '0.2rem' }}>
-              {isAdmin ? 'Platform administrator' : 'Platform research user'}
+              {isAdmin ? <Localized en="Platform administrator" vi="Quản trị viên hệ thống"/> : <Localized en="Platform research user" vi="Người dùng nghiên cứu"/>}
             </p>
           </div>
 
@@ -50,7 +51,7 @@ export default async function AccountPage() {
                 style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', width: 'fit-content', textDecoration: 'none' }}
               >
                 <Shield size={16} aria-hidden="true" />
-                <span>Administration</span>
+                <span><Localized en="Administration" vi="Quản trị"/></span>
               </Link>
             </div>
           )}

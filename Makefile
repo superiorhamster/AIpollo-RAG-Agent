@@ -7,7 +7,7 @@ WAIT_TIMEOUT ?= 180
 PRODUCTION_ENV ?= .env.production
 PRODUCTION_COMPOSE := docker compose --env-file "$(PRODUCTION_ENV)" -f compose.dev.yaml -f compose.prod.yaml
 
-.PHONY: check env bootstrap compose-check up ps logs down verify verify-app verify-phase01 verify-phase02 verify-phase03 verify-provider verify-embedding eval-embedding reindex-embeddings promote-admin \
+.PHONY: check env bootstrap compose-check up ps logs down verify verify-app verify-phase01 verify-phase02 verify-phase03 verify-ui verify-local-rag verify-provider verify-embedding eval-embedding reindex-embeddings promote-admin \
         infra-up infra-down infra-ps infra-logs verify-infra clean-infra
 
 check:
@@ -48,6 +48,12 @@ verify-phase02: env
 
 verify-phase03: env
 	@bash scripts/verify-phase03.sh
+
+verify-ui: env
+	@bash scripts/verify-ui.sh
+
+verify-local-rag: env
+	@bash scripts/verify-local-rag.sh
 
 verify-provider:
 	$(COMPOSE) exec -T model-gateway python - < scripts/verify-provider.py

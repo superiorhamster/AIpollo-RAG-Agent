@@ -30,7 +30,7 @@ RUN_FIELDS = (
     "run_id, retry_of_run_id, interaction, conversation_id, plan_id, plan_version, "
     "status, step, result, "
     f"CASE WHEN error_code = '{ASK_COMPLETION_UNAVAILABLE}' THEN 'interaction_unavailable' ELSE error_code END AS error_code, "
-    f"COALESCE(error_code = '{ASK_COMPLETION_UNAVAILABLE}', false) AS retryable, "
+    f"COALESCE(status = 'failed' AND conversation_id IS NOT NULL AND interaction = 'ASK' AND error_code IN ('{ASK_COMPLETION_UNAVAILABLE}', 'invalid_model_output'), false) AS retryable, "
     "CASE WHEN interaction = 'ASK' THEN input END AS objective, "
     "request_id, created_at, updated_at, input->>'query' AS query"
 )
@@ -254,7 +254,7 @@ async def retry_context(connection: AsyncConnection, data: StartRun, workspace_i
     if original is None:
         raise missing()
     if (original["interaction"] != "ASK" or original["status"] != "failed"
-            or original["error_code"] != ASK_COMPLETION_UNAVAILABLE or original["conversation_id"] is None):
+            or original["error_code"] not in {ASK_COMPLETION_UNAVAILABLE, "invalid_model_output"} or original["conversation_id"] is None):
         raise ApiError(409, "run_not_retryable", "Only an unavailable Ask completion can be retried.")
     objective = Objective.model_validate(original["input"])
     if (data.objective != objective

@@ -1,5 +1,7 @@
 """Authorize source scope and rank grounded evidence."""
 
+from rag_runtime import RuntimeBudgets
+
 import os
 import re
 import unicodedata
@@ -100,7 +102,7 @@ async def candidates(
     if not scope:
         return SearchResult(evidence=[], indexed_documents=[])
     response = await client.post(
-        model_path + "/embeddings", headers=model_headers, timeout=30,
+        model_path + "/embeddings", headers=model_headers, timeout=RuntimeBudgets.from_env().embedding_caller,
         json={"texts": [data.query.strip()], "fingerprint": config.fingerprint},
     )
     response.raise_for_status()

@@ -1,5 +1,6 @@
 """Store an index generation in Qdrant using stable point identifiers."""
 
+import asyncio
 import hmac
 import os
 from collections.abc import AsyncIterator
@@ -11,6 +12,7 @@ import httpx
 from fastapi import FastAPI, Request, Response
 
 from rag_http import ApiError, health_response, install_http, request_id, require_service, unauthorized, unavailable
+from rag_runtime import RuntimeBudgets
 from rag_index import MAX_CHUNKS, EmbeddingConfig, IndexBatch
 
 from .search import SearchRequest, SearchResult, delegated_search, search
@@ -26,6 +28,7 @@ class RejectCookies(DefaultCookiePolicy):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    RuntimeBudgets.from_env()  # Reject invalid deadline combinations before serving traffic.
     app.state.token = os.environ["INGESTION_RETRIEVAL_TOKEN"].encode()
     async with httpx.AsyncClient(
         base_url=os.environ.get("QDRANT_URL", "http://qdrant:6333"),
@@ -150,10 +153,18 @@ async def delete_index(workspace_id: UUID, request: Request, document_id: UUID |
 
 @app.post("/v1/workspaces/{workspace_id}/search")
 async def workspace_search(workspace_id: UUID, data: SearchRequest, request: Request) -> SearchResult:
-    return await search(workspace_id, data, request, app.state.services, app.state.qdrant)
+    try:
+        async with asyncio.timeout(RuntimeBudgets.from_env().search):
+            return await search(workspace_id, data, request, app.state.services, app.state.qdrant)
+    except TimeoutError as exc:
+        raise unavailable() from exc
 
 
 @app.post("/internal/v1/workspaces/{workspace_id}/users/{user_id}/search", include_in_schema=False)
 async def worker_search(workspace_id: UUID, user_id: UUID, data: SearchRequest, request: Request) -> SearchResult:
     require_service(request, "X-Interaction-Service-Token", os.environ["RETRIEVAL_INTERACTION_TOKEN"])
-    return await delegated_search(workspace_id, user_id, data, request, app.state.services, app.state.qdrant)
+    try:
+        async with asyncio.timeout(RuntimeBudgets.from_env().search):
+            return await delegated_search(workspace_id, user_id, data, request, app.state.services, app.state.qdrant)
+    except TimeoutError as exc:
+        raise unavailable() from exc

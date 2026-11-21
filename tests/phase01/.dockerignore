@@ -3,3 +3,6 @@
 !pnpm-lock.yaml
 !playwright.config.ts
 !workspace.spec.ts
+!ui.config.ts
+!ui.spec.ts
+!ui-gateway.mjs

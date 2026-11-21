@@ -31,6 +31,10 @@ services:
       start_period: 180s
     restart: unless-stopped
 
+  ingestion-service:
+    environment:
+      INGESTION_EMBED_BATCH_SIZE: ${INGESTION_EMBED_BATCH_SIZE:-1}
+
   model-gateway:
     environment:
       MODEL_PROVIDER: openai-compatible

@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { Localized } from './workspace-language'
 import type { ReactNode } from 'react'
 
 export type IconName =
@@ -31,19 +32,25 @@ const features = [
   ['feature-book', 'Learn · Research · Write', 'Quizzes, flashcards, evidence tables and cited drafts.'],
 ] as const
 
+const featureTranslations: Record<string, [string, string]> = {
+  'feature-shield': ['Dựa trên nguồn tài liệu', 'Đọc câu trả lời cùng các trích dẫn có thể kiểm chứng.'],
+  'feature-plan': ['Duyệt kế hoạch trước khi chạy', 'Xem và chỉnh sửa kế hoạch. Chỉ thực hiện sau khi bạn chấp nhận.'],
+  'feature-book': ['Học · Nghiên cứu · Viết', 'Câu hỏi ôn tập, thẻ ghi nhớ, bảng bằng chứng và bản nháp có trích dẫn.'],
+}
+
 export function AuthLayout({ children, note }: { children: ReactNode; note?: ReactNode }) {
   return (
     <main className="auth-layout">
       <aside className="auth-brand">
         <Link className="auth-wordmark" href="/">AIpollo</Link>
         <img src="/aipollo/logo.png" alt="" width={114} height={114} />
-        <p className="auth-headline">Your academic knowledge workspace.</p>
-        <p className="auth-description">Learn from course materials, review literature, and write with citations you can verify.</p>
+        <p className="auth-headline"><Localized en="Your academic knowledge workspace." vi="Không gian tri thức học thuật của bạn." /></p>
+        <p className="auth-description"><Localized en="Learn from course materials, review literature, and write with citations you can verify." vi="Học từ tài liệu, nghiên cứu tổng quan và viết với các trích dẫn có thể kiểm chứng." /></p>
         <ul className="auth-features">
           {features.map(([icon, title, detail]) => (
             <li key={icon}>
               <span className="auth-feature-icon"><DesignIcon name={icon} /></span>
-              <div><strong>{title}</strong><p>{detail}</p></div>
+              <div><strong><Localized en={title} vi={featureTranslations[icon][0]} /></strong><p><Localized en={detail} vi={featureTranslations[icon][1]} /></p></div>
             </li>
           ))}
         </ul>

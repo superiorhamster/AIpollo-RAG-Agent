@@ -18,14 +18,15 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel, Field, ValidationError
 
 from rag_http import ApiError, health_response, install_http, request_id, require_service, unauthorized
+from rag_runtime import RuntimeBudgets
 from rag_index import EmbeddingBatch, EmbeddingConfig, EmbeddingResult
 
 SERVICE = "model-gateway"
 LOG = logging.getLogger("uvicorn.error")
 
 GEMINI_CONCURRENCY = 4
-# Ingestion waits 30 seconds for the entire embedding batch.
-GEMINI_BATCH_TIMEOUT_SECONDS = 25
+# Compatibility name retained for adapter tests; applies to every protocol.
+GEMINI_BATCH_TIMEOUT_SECONDS = RuntimeBudgets.from_env().embedding
 OLLAMA_OPTIONS = {"num_ctx": 8192, "num_thread": 4}
 
 
@@ -117,6 +118,14 @@ async def embedding_config(request: Request) -> EmbeddingConfig:
 
 @app.post("/internal/v1/embeddings")
 async def embed(data: EmbeddingBatch, request: Request) -> EmbeddingResult:
+    try:
+        async with asyncio.timeout(GEMINI_BATCH_TIMEOUT_SECONDS):
+            return await embed_batch(data, request)
+    except TimeoutError as exc:
+        raise ApiError(503, "provider_unavailable", "The embedding provider exceeded the batch deadline.") from exc
+
+
+async def embed_batch(data: EmbeddingBatch, request: Request) -> EmbeddingResult:
     config = await embedding_config(request)
     if config.fingerprint != data.fingerprint:
         raise ApiError(409, "model_changed", "The embedding model configuration changed.")
@@ -162,7 +171,7 @@ async def fetch_embeddings(
             base_url + ("/api/embed" if ollama else "/embeddings"),
             headers={"Authorization": "Bearer " + os.environ["MODEL_EMBEDDING_API_KEY"],
                      "X-Request-ID": request_id(request)},
-            json=payload,
+            json=payload, timeout=httpx.Timeout(GEMINI_BATCH_TIMEOUT_SECONDS, connect=5),
         )
     except httpx.HTTPError as exc:
         raise ApiError(503, "provider_unavailable", "The embedding provider could not be reached.") from exc

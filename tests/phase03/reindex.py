@@ -1,13 +1,14 @@
 """Exercise model migration selection and publication against PostgreSQL."""
 
+import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import httpx
 from sqlalchemy import text
 
-from app.indexing import IndexJob, IndexWorker
+from app.indexing import FailedSource, IndexJob, IndexWorker, ParserBusy
 from app.reindex import reindex
 from rag_db import open_database
 from rag_index import Chunk, EmbeddingConfig, IndexBatch
@@ -93,6 +94,75 @@ class Reindex(unittest.IsolatedAsyncioTestCase):
             row = await self.stored(job)
             self.assertEqual((row["status"], row["index_generation"], row["embedding_fingerprint"]),
                              ("succeeded", generation, NEW))
+
+    async def running(self):
+        identifier = await self.seed()
+        row = await self.stored(identifier)
+        lease = uuid4()
+        async with self.database.begin() as connection:
+            await connection.execute(text("UPDATE ingestion.jobs SET status='running',attempts=1,lease_id=:lease,lease_until=now()+interval '1 hour' WHERE job_id=:job"),
+                                     {"lease": lease, "job": identifier})
+        return IndexJob(identifier, self.workspace, row['document_id'], uuid4(), lease, 1)
+
+    async def test_cpu_batch_preserves_ordinals_and_atomic_publication(self):
+        job = await self.running()
+        batches = []
+        def upstream(request):
+            import json
+            data = json.loads(request.content)
+            if request.url.host == 'model-gateway':
+                self.assertEqual(len(data['texts']), 1)
+                self.assertEqual(request.extensions['timeout']['read'], 75)
+                return httpx.Response(200, json={'vectors': [[1., 2., 3.]]})
+            batches.append(data)
+            return httpx.Response(204)
+        with patch.dict('os.environ', {'INGESTION_EMBED_BATCH_SIZE': '1', 'MODEL_EMBEDDING_TOKEN': 'fixture', 'INGESTION_RETRIEVAL_TOKEN': 'fixture'}):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+                worker = IndexWorker(self.database, client, 'fixture')
+                worker.read_chunks = AsyncMock(return_value=[Chunk(text=f'Tài liệu {i}', page=i) for i in (1, 2, 3)])
+                await worker.run(job, EmbeddingConfig(fingerprint=NEW, dimensions=3))
+        self.assertEqual([batch['offset'] for batch in batches], [0, 1, 2])
+        row = await self.stored(job.job_id)
+        self.assertEqual((row['status'], row['embedding_fingerprint']), ('succeeded', NEW))
+
+    async def test_parser_timeout_is_terminal_and_busy_is_bounded_retry(self):
+        for failure, expected in ((FailedSource('parse_timeout'), 'failed'), (ParserBusy(20), 'queued')):
+            job = await self.running()
+            original = await self.stored(job.job_id)
+            with patch.dict('os.environ', {'MODEL_EMBEDDING_TOKEN': 'fixture', 'INGESTION_RETRIEVAL_TOKEN': 'fixture'}):
+                async with httpx.AsyncClient() as client:
+                    worker = IndexWorker(self.database, client, 'fixture')
+                    worker.read_chunks = AsyncMock(side_effect=failure)
+                    await worker.run(job, EmbeddingConfig(fingerprint=NEW, dimensions=3))
+            saved = await self.stored(job.job_id)
+            self.assertEqual(saved['status'], expected)
+            self.assertEqual(saved['index_generation'], original['index_generation'])
+            self.assertEqual(saved['embedding_fingerprint'], original['embedding_fingerprint'])
+            self.assertEqual(saved['attempts'], 1)
+
+    async def test_shutdown_releases_only_the_owned_lease_without_losing_publication(self):
+        job = await self.running()
+        before = await self.stored(job.job_id)
+        entered = asyncio.Event()
+        async def pending(_job):
+            entered.set()
+            await asyncio.Future()
+        with patch.dict('os.environ', {'MODEL_EMBEDDING_TOKEN': 'fixture', 'INGESTION_RETRIEVAL_TOKEN': 'fixture'}):
+            async with httpx.AsyncClient() as client:
+                worker = IndexWorker(self.database, client, 'fixture')
+                worker.read_chunks = pending
+                task = asyncio.create_task(worker.run(job, EmbeddingConfig(fingerprint=NEW, dimensions=3)))
+                await entered.wait()
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                saved = await self.stored(job.job_id)
+                self.assertEqual((saved['status'], saved['attempts']), ('queued', 0))
+                self.assertEqual(saved['index_generation'], before['index_generation'])
+                async with self.database.begin() as connection:
+                    await connection.execute(text("UPDATE ingestion.jobs SET status='cancelled', lease_id=NULL WHERE job_id=:job"), {'job': job.job_id})
+                await worker.release(job)
+                self.assertEqual((await self.stored(job.job_id))['status'], 'cancelled')
 
 
 if __name__ == "__main__":

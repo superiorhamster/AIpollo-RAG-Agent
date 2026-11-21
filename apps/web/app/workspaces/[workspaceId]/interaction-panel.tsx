@@ -75,11 +75,13 @@ type Run = {
 type Conversation = { conversation_id: string; name: string }
 
 export function InteractionPanel({
-  workspaceId, workspaceName, documents, selectedSources, setSelectedSources, onSourcesLock, showHistory, canPublish, onCitation,
+  workspaceId, workspaceName, documents, readySources, onOpenArtifact, selectedSources, setSelectedSources, onSourcesLock, showHistory, canPublish, onCitation,
 }: {
   workspaceId: string
   workspaceName: string
   documents: DocumentItem[]
+  readySources: string[]
+  onOpenArtifact: (id: string) => void
   selectedSources: string[]
   setSelectedSources: Dispatch<SetStateAction<string[]>>
   onSourcesLock: (locked: boolean) => void
@@ -91,6 +93,7 @@ export function InteractionPanel({
   const { text } = useWorkspaceLanguage()
   const [capability, setCapability] = useState<Capability>('LEARN')
   const [published, setPublished] = useState<string>()
+  const [savedArtifacts, setSavedArtifacts] = useState<Record<string, string>>({})
   const [copied, setCopied] = useState<string>()
   const [mode, setMode] = useState<Mode>('ASK')
   const [plan, setPlan] = useState<Plan>()
@@ -220,6 +223,10 @@ export function InteractionPanel({
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (selectedSources.some(id => !readySources.includes(id))) {
+      setError(text('Wait for the selected sources to finish indexing.', 'Vui lòng chờ các nguồn đã chọn lập chỉ mục xong.'))
+      return
+    }
     const element = event.currentTarget
     const form = new FormData(element)
     const document_ids = selectedSources.filter(id => documents.some(doc => doc.document_id === id))
@@ -344,7 +351,7 @@ export function InteractionPanel({
         {item.status === 'cancelled' && <p role="status">Run cancelled.</p>}
         {(item.error_code || retryPending) && <div className="ask-run-error">
           <p role={retryPending ? 'status' : 'alert'}><DesignIcon name="error" /> {retryPending
-            ? 'Retrying…' : `Run failed. ${item.error_code?.replaceAll('_', ' ')}.`}</p>
+            ? 'Retrying…' : item.error_code === 'invalid_model_output' ? text('The model returned an invalid answer. Try again.', 'Mô hình trả lời sai định dạng hoặc trích dẫn. Hãy thử lại.') : `Run failed. ${item.error_code?.replaceAll('_', ' ')}.`}</p>
           {(retryPending || (item.interaction === 'ASK' && item.retryable && item.objective && item.conversation_id)) &&
             <button type="button" className="secondary sm ask-retry" aria-label="Retry" title="Retry"
               aria-busy={retryPending} disabled={locked} onClick={() => void retry(original.run_id, item)}>
@@ -389,7 +396,8 @@ export function InteractionPanel({
               event.preventDefault()
               const name = String(new FormData(event.currentTarget).get('name')).trim()
               void perform(async () => {
-                await api(base + '/artifacts', 'POST', { name, run_id: item.run_id })
+                const saved = await api<{ artifact_id: string }>(base + '/artifacts', 'POST', { name, run_id: item.run_id })
+                setSavedArtifacts(current => ({ ...current, [item.run_id]: saved.artifact_id }))
                 setPublished(item.run_id)
               })
             }}>
@@ -398,6 +406,8 @@ export function InteractionPanel({
               <button className="sm" disabled={busy || published === item.run_id}>Save artifact</button>
             </form>
           </details>}
+          {savedArtifacts[item.run_id] && <button type="button" className="secondary sm"
+            onClick={() => onOpenArtifact(savedArtifacts[item.run_id])}>{text('Open artifact', 'Mở sản phẩm')}</button>}
           </div>
         </div>}
       </article>
@@ -506,7 +516,7 @@ export function InteractionPanel({
           <details className="composer-mobile-sources">
             <summary>{text('Choose sources', 'Chọn nguồn')}</summary>
             {documents.map(doc => <label className="check-option" key={doc.document_id}>
-              <input type="checkbox" checked={selectedSources.includes(doc.document_id)} disabled={locked}
+              <input type="checkbox" checked={selectedSources.includes(doc.document_id)} disabled={locked || !readySources.includes(doc.document_id)}
                 onChange={event => {
                   const checked = event.currentTarget.checked
                   setSelectedSources(current => checked ? [...new Set([...current, doc.document_id])]
