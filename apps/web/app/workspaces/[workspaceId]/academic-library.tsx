@@ -55,7 +55,7 @@ export function AcademicLibrary({ workspace, view, onCitation, openedArtifact }:
   }, [base, view, openedArtifact])
 
   function cite(item: Citation) {
-    setActiveCitation(item.chunk_id)
+    setActiveCitation(item.citation_id ?? item.chunk_id)
     onCitation(item)
   }
   const visibleArtifacts = artifacts?.filter(item => !kind || item.kind === kind)
@@ -191,8 +191,8 @@ export function AcademicLibrary({ workspace, view, onCitation, openedArtifact }:
                     <td key={column}>
                       {row.fields?.[column] ?? <span className="badge badge-warning">Unavailable</span>}
                       {column === 'source' && <div className="claim-citations">{row.citations.map(citation => (
-                        <button type="button" className="citation-pill" key={citation.chunk_id}
-                          aria-pressed={activeCitation === citation.chunk_id} onClick={() => cite(citation)}>
+                        <button type="button" className="citation-pill" key={citation.citation_id ?? citation.chunk_id}
+                          aria-pressed={activeCitation === (citation.citation_id ?? citation.chunk_id)} onClick={() => cite(citation)}>
                           <DesignIcon name="citation" />{citation.name}, page {citation.page}
                         </button>
                       ))}</div>}
@@ -209,7 +209,7 @@ export function AcademicLibrary({ workspace, view, onCitation, openedArtifact }:
                     <button
                       type="button"
                       className="secondary citation-pill"
-                      key={citation.chunk_id}
+                      key={citation.citation_id ?? citation.chunk_id}
                       onClick={() => cite(citation)}
                     >
                       <FileText size={12} aria-hidden="true" />

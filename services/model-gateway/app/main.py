@@ -229,10 +229,17 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
         payload = json.loads(data.messages[-1].content)
         if "question" in payload and "history" in payload and "evidence" not in payload:
             return CompletionOutput(text=json.dumps({"query": payload["question"]}))
+        if "targets" in payload and "parents" in payload:
+            return CompletionOutput(text=json.dumps({"attributions": [
+                {"target": row["target"], "segment_ids": [payload["parents"][row["parent"]][0]["id"]]}
+                for row in payload["targets"]
+            ]}))
         sources = payload["evidence"]
         if not sources:
             return CompletionOutput(text=json.dumps({"claims": []}))
         first = sources[0]
+        if "segments" in first:
+            first = first["segments"][0]
         fields = {name: first["text"][:600] for name in payload.get("fields", [])}
         return CompletionOutput(text=json.dumps({"claims": [{
             "text": first["text"], "evidence": [first["id"]], "fields": fields,

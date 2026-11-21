@@ -8,14 +8,16 @@ import { DesignIcon } from '../../components/aipollo'
 import { authenticatedFetch, readResponse } from '../../lib/api'
 
 export type Region = [number, number, number, number]
-export type CitationTarget = { document_id: string; page: number; region?: Region | null; text?: string }
+export type CitationTarget = { document_id: string; page: number; region?: Region | null; regions?: Region[] | null;
+  citation_id?: string | null; segment_ids?: string[] | null; precision?: 'line' | 'coarse' | 'page' | null; text?: string }
 
-export function PdfPreview({ url, page, onPage, regions = [], citationRegion, onRegion, onClearCitation }: {
+export function PdfPreview({ url, page, onPage, regions = [], citationRegion, citationRegions, onRegion, onClearCitation }: {
   url: string
   page: number
   onPage: (page: number) => void
   regions?: Region[]
   citationRegion?: Region
+  citationRegions?: Region[] | null
   onRegion?: (region: Region, page: number) => void
   onClearCitation?: () => void
 }) {
@@ -34,6 +36,7 @@ export function PdfPreview({ url, page, onPage, regions = [], citationRegion, on
   const lastMatch = useRef<{ query: string; page: number }>(undefined)
   const start = useRef<[number, number] | undefined>(undefined)
   const canvas = useRef<HTMLCanvasElement>(null)
+  const citationBoxes = citationRegions?.length ? citationRegions : citationRegion ? [citationRegion] : []
   const citationMark = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {
@@ -95,7 +98,7 @@ export function PdfPreview({ url, page, onPage, regions = [], citationRegion, on
       const frame = requestAnimationFrame(() => target.scrollIntoView({ block: 'nearest', inline: 'nearest' }))
       return () => cancelAnimationFrame(frame)
     }
-  }, [citationRegion, pdf, pageNumber, renderedPage])
+  }, [citationRegion, citationRegions, pdf, pageNumber, renderedPage])
 
   async function findText(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -192,7 +195,7 @@ export function PdfPreview({ url, page, onPage, regions = [], citationRegion, on
         <p role="status">Loading preview…</p>
       )}
       {pageError && <p role="alert">{text('Enter a valid page number.', 'Nhập số trang hợp lệ.')}</p>}
-      {citationRegion && onClearCitation && <button type="button" className="secondary sm" onClick={onClearCitation}>{text('Clear highlight', 'Bỏ tô sáng trích dẫn')}</button>}
+      {citationBoxes.length > 0 && onClearCitation && <button type="button" className="secondary sm" onClick={onClearCitation}>{text('Clear highlight', 'Bỏ tô sáng trích dẫn')}</button>}
       {pdf && findOpen && <form className="reader-find" onSubmit={findText}>
         <input type="search" name="find" aria-label="Text to find" placeholder="Find text in the PDF…" required disabled={finding} autoFocus />
         <button type="submit" className="secondary sm" disabled={finding}>{finding ? 'Finding…' : 'Find next'}</button>
@@ -201,11 +204,13 @@ export function PdfPreview({ url, page, onPage, regions = [], citationRegion, on
       <div className="pdf-paper" hidden={!pdf} tabIndex={0} role="region" aria-label={text('Scrollable PDF page', 'Trang PDF có thể cuộn')}>
         <div className="pdf-stage" style={{ width: zoom + '%' }}>
         <canvas ref={canvas} role="img" aria-label={'PDF page ' + pageNumber} />
-        {citationRegion && <span className="pdf-highlight citation-highlight" role="mark" aria-label="Citation highlight" ref={citationMark} style={{
-          left: citationRegion[0] * 100 + '%', top: citationRegion[1] * 100 + '%',
-          width: (citationRegion[2] - citationRegion[0]) * 100 + '%',
-          height: (citationRegion[3] - citationRegion[1]) * 100 + '%',
-        }} />}
+        {citationBoxes.map(([left, top, right, bottom], index) => (
+          <span className="pdf-highlight citation-highlight" role="mark" aria-label="Citation highlight"
+            key={index} ref={index === 0 ? citationMark : undefined} style={{
+              left: left * 100 + '%', top: top * 100 + '%',
+              width: (right - left) * 100 + '%', height: (bottom - top) * 100 + '%',
+            }} />
+        ))}
         {regions.map(([left, top, right, bottom], index) => (
           <span
             key={index}

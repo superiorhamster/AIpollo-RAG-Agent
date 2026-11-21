@@ -15,7 +15,9 @@ OWNERSHIP = {char: uuid4() for char in ["o", "e", "v", "x"]}
 WORKSPACE, RUN, DOC, CHUNK = [uuid4() for _ in range(4)]
 BASE = f"/v1/workspaces/{WORKSPACE}/artifacts"
 BODY = {"claims": [{"text": "The fixture obtained four results.", "citations": [
-    {"document_id": str(DOC), "chunk_id": str(CHUNK), "name": "Study", "page": 3}
+    {"document_id": str(DOC), "chunk_id": str(CHUNK), "name": "Study", "page": 3,
+     "segment_ids": [str(uuid4())], "citation_id": str(uuid4()), "precision": "line",
+     "regions": [[0.1, 0.1, 0.7, 0.2], [0.1, 0.3, 0.4, 0.4]]}
 ]}], "insufficient_evidence": False}
 
 

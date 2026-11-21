@@ -15,11 +15,36 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from rag_telemetry import operation
 from rag_runtime import RuntimeBudgets
-from rag_index import EMBED_BATCH, MAX_CHUNKS, MAX_PDF_BYTES, Chunk, EmbeddingConfig, EmbeddingResult, IndexBatch
+from rag_index import EMBED_BATCH, MAX_CHUNKS, MAX_PDF_BYTES, IndexedChunk, EmbeddingConfig, EmbeddingResult, IndexBatch, point_id, segment_id
 
 LOG = logging.getLogger(__name__)
 INDEX_REVISION = "docling-2.150.1-page-v1"
-chunk_list = TypeAdapter(list[Chunk])
+chunk_list = TypeAdapter(list[IndexedChunk])
+
+
+def citation_generation(document_id, fingerprint, chunks):
+    enriched = any(chunk.citation_segments_v1 for chunk in chunks)
+    revision = INDEX_REVISION + (":sentences-v1" if enriched else "")
+    projection = []
+    for chunk in chunks:
+        wire = chunk.model_dump(mode="json", exclude={"citation_segments_v1"})
+        if chunk.citation_segments_v1:
+            wire["citation_segments_v1"] = [
+                segment.model_dump(mode="json", exclude={"id"}) for segment in chunk.citation_segments_v1
+            ]
+        projection.append(wire)
+    version = hashlib.sha256(json.dumps(projection, ensure_ascii=False).encode()).hexdigest()
+    generation = uuid5(document_id, f"{revision}:{fingerprint}:{version}")
+    resolved = []
+    for ordinal, chunk in enumerate(chunks):
+        if chunk.citation_segments_v1:
+            parent = point_id(generation, ordinal)
+            chunk = chunk.model_copy(update={"citation_segments_v1": [
+                segment.model_copy(update={"id": segment_id(parent, segment.ordinal)})
+                for segment in chunk.citation_segments_v1
+            ]})
+        resolved.append(chunk)
+    return generation, resolved
 
 
 class FailedSource(Exception):
@@ -100,7 +125,7 @@ class IndexWorker:
             selected = result.mappings().one_or_none()
             return IndexJob(**selected) if selected else None
 
-    async def read_chunks(self, job: IndexJob) -> list[Chunk]:
+    async def read_chunks(self, job: IndexJob) -> list[IndexedChunk]:
         request_headers = {"X-Request-ID": str(job.request_id)}
         document_headers = {**request_headers, "X-Ingestion-Service-Token": self.document_token}
         url = (
@@ -180,9 +205,7 @@ class IndexWorker:
         try:
             async with asyncio.timeout(self.budgets.index):
                 chunks = await self.read_chunks(job)
-                serialized = json.dumps([chunk.model_dump(mode="json") for chunk in chunks], ensure_ascii=False)
-                version = hashlib.sha256(serialized.encode()).hexdigest()
-                generation = uuid5(job.document_id, f"{INDEX_REVISION}:{config.fingerprint}:{version}")
+                generation, chunks = citation_generation(job.document_id, config.fingerprint, chunks)
                 for offset in range(0, len(chunks), self.budgets.batch):
                     selected = chunks[offset:offset + self.budgets.batch]
                     texts = [f"{chunk.section}\n{chunk.text}"[:1800] if chunk.section else chunk.text
