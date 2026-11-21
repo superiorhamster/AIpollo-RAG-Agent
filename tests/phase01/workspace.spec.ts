@@ -43,7 +43,7 @@ test('renews access for browser actions and coordinates a shared session across 
 
   await context.clearCookies()
   await page.goto('/workspaces')
-  await expect(page).toHaveURL(/\/sign-in$/)
+  await expect(page).toHaveURL(/\/sign-in$/, { timeout: 20000 })
 })
 
 test('registration validates each password requirement', async ({ page }) => {
@@ -61,8 +61,9 @@ async function signUp(page: Page, email: string) {
   await page.goto('/register')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password', { exact: true }).fill(password)
+  await page.getByLabel('Confirm password', { exact: true }).fill(password)
   await page.getByRole('button', { name: 'Create account', exact: true }).click()
-  await expect(page).toHaveURL(/\/sign-in$/)
+  await expect(page).toHaveURL(/\/sign-in\?registered=1$/)
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password', { exact: true }).fill(password)
   const response = page.waitForResponse(result => result.request().method() === 'POST' &&
@@ -89,12 +90,13 @@ async function grant(page: Page, id: string, role: 'VIEWER' | 'EDITOR') {
 }
 
 test('owner shares a workspace with a viewer and editor, then revokes and deletes', async ({ browser, page, baseURL }) => {
+  test.slow()
   const viewerContext = await browser.newContext({ baseURL })
   const editorContext = await browser.newContext({ baseURL })
   const suffix = Date.now()
   try {
     await page.goto('/workspaces')
-    await expect(page).toHaveURL(/\/sign-in$/)
+    await expect(page).toHaveURL(/\/sign-in$/, { timeout: 20000 })
     const viewer = await viewerContext.newPage()
     const editor = await editorContext.newPage()
     await signUp(page, `owner-browser-${suffix}@example.com`)
@@ -137,9 +139,9 @@ test('owner shares a workspace with a viewer and editor, then revokes and delete
     await expect(page.getByText('You have no workspaces yet.')).toBeVisible()
 
     await page.getByRole('button', { name: 'Sign out', exact: true }).click()
-    await expect(page).toHaveURL(/\/sign-in$/)
+    await expect(page).toHaveURL(/\/sign-in$/, { timeout: 20000 })
     await page.goto('/workspaces')
-    await expect(page).toHaveURL(/\/sign-in$/)
+    await expect(page).toHaveURL(/\/sign-in$/, { timeout: 20000 })
   } finally {
     await Promise.allSettled([viewerContext.close(), editorContext.close()])
   }

@@ -1,0 +1,21 @@
+# Synthetic UI tests only; no application databases, providers or shared accounts.
+services:
+  web:
+    environment:
+      API_GATEWAY_URL: http://ui-fixtures:24001
+      WEB_ORIGIN: http://127.0.0.1:3000
+  ui-fixtures:
+    build: ./tests/phase01
+    command: [node, /tests/ui-gateway.mjs]
+    environment:
+      UI_FIXTURE_HOST: 0.0.0.0
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:24001/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  phase01-browser-tests:
+    command: [pnpm, test, --config, ui.config.ts]
+    environment:
+      UI_TEST_REMOTE: "1"
+      UI_TEST_GATEWAY_URL: http://ui-fixtures:24001

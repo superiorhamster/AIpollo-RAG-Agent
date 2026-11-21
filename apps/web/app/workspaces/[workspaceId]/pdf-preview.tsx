@@ -3,20 +3,25 @@
 import { useEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react'
 import type { PDFDocumentProxy, PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist'
 import { RefreshCw, AlertCircle } from 'lucide-react'
+import { useWorkspaceLanguage } from '../../components/workspace-language'
 import { DesignIcon } from '../../components/aipollo'
 import { authenticatedFetch, readResponse } from '../../lib/api'
 
 export type Region = [number, number, number, number]
 export type CitationTarget = { document_id: string; page: number; region?: Region | null; text?: string }
 
-export function PdfPreview({ url, page, onPage, regions = [], citationRegion, onRegion }: {
+export function PdfPreview({ url, page, onPage, regions = [], citationRegion, onRegion, onClearCitation }: {
   url: string
   page: number
   onPage: (page: number) => void
   regions?: Region[]
   citationRegion?: Region
   onRegion?: (region: Region, page: number) => void
+  onClearCitation?: () => void
 }) {
+  const { text } = useWorkspaceLanguage()
+  const [pageInput, setPageInput] = useState(String(page))
+  const [pageError, setPageError] = useState(false)
   const [pdf, setPdf] = useState<PDFDocumentProxy>()
   const [loadError, setLoadError] = useState(false)
   const [renderError, setRenderError] = useState(false)
@@ -56,6 +61,7 @@ export function PdfPreview({ url, page, onPage, regions = [], citationRegion, on
   }, [url, attempt])
 
   const pageNumber = pdf ? Math.min(page, pdf.numPages) : page
+  useEffect(() => { setPageInput(String(pageNumber)); setPageError(false) }, [pageNumber])
   useEffect(() => {
     if (!pdf) return
     const document = pdf
@@ -158,7 +164,18 @@ export function PdfPreview({ url, page, onPage, regions = [], citationRegion, on
         <div className="pdf-controls">
           <button type="button" aria-label="Previous page" disabled={pageNumber === 1}
             onClick={() => onPage(pageNumber - 1)}><DesignIcon name="chevron-left" /></button>
-          <span aria-live="polite">Page {pageNumber} of {pdf.numPages}</span>
+          <form className="pdf-page-jump" onSubmit={event => {
+            event.preventDefault()
+            const next = Number(pageInput)
+            if (!Number.isSafeInteger(next) || next < 1 || next > pdf.numPages) { setPageError(true); return }
+            setPageError(false)
+            onPage(next)
+          }}>
+            <span aria-live="polite">{text('Page', 'Trang')} {pageNumber} {text('of', 'trên')} {pdf.numPages}</span>
+            <input type="number" inputMode="numeric" aria-label={text('Page number', 'Số trang')}
+              min={1} max={pdf.numPages} value={pageInput} onChange={event => setPageInput(event.currentTarget.value)} />
+            <button type="submit">{text('Go', 'Đi')}</button>
+          </form>
           <button type="button" aria-label="Next page" disabled={pageNumber === pdf.numPages}
             onClick={() => onPage(pageNumber + 1)}><DesignIcon name="chevron-right" /></button>
           <div className="pdf-zoom">
@@ -174,15 +191,17 @@ export function PdfPreview({ url, page, onPage, regions = [], citationRegion, on
       ) : (
         <p role="status">Loading preview…</p>
       )}
+      {pageError && <p role="alert">{text('Enter a valid page number.', 'Nhập số trang hợp lệ.')}</p>}
+      {citationRegion && onClearCitation && <button type="button" className="secondary sm" onClick={onClearCitation}>{text('Clear highlight', 'Bỏ tô sáng trích dẫn')}</button>}
       {pdf && findOpen && <form className="reader-find" onSubmit={findText}>
         <input type="search" name="find" aria-label="Text to find" placeholder="Find text in the PDF…" required disabled={finding} autoFocus />
         <button type="submit" className="secondary sm" disabled={finding}>{finding ? 'Finding…' : 'Find next'}</button>
         {findResult && <p role="status">{findResult}</p>}
       </form>}
-      <div className="pdf-paper" hidden={!pdf}>
+      <div className="pdf-paper" hidden={!pdf} tabIndex={0} role="region" aria-label={text('Scrollable PDF page', 'Trang PDF có thể cuộn')}>
         <div className="pdf-stage" style={{ width: zoom + '%' }}>
         <canvas ref={canvas} role="img" aria-label={'PDF page ' + pageNumber} />
-        {citationRegion && <span className="pdf-highlight citation-highlight" ref={citationMark} style={{
+        {citationRegion && <span className="pdf-highlight citation-highlight" role="mark" aria-label="Citation highlight" ref={citationMark} style={{
           left: citationRegion[0] * 100 + '%', top: citationRegion[1] * 100 + '%',
           width: (citationRegion[2] - citationRegion[0]) * 100 + '%',
           height: (citationRegion[3] - citationRegion[1]) * 100 + '%',

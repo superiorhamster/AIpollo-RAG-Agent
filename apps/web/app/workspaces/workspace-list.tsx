@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useWorkspaceLanguage } from '../components/workspace-language'
 import { useRouter } from 'next/navigation'
 import { useRef, useState, type FormEvent } from 'react'
 import {
@@ -28,6 +29,7 @@ function sortWorkspaces(workspaces: Workspace[]) {
 
 export function WorkspaceList({ initial }: { initial: Workspace[] }) {
   const router = useRouter()
+  const { text } = useWorkspaceLanguage()
   const [workspaces, setWorkspaces] = useState(initial)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
@@ -136,13 +138,13 @@ export function WorkspaceList({ initial }: { initial: Workspace[] }) {
         <label style={{ flex: '1 1 18rem' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
             <FolderPlus size={16} aria-hidden="true" />
-            <span>Workspace name</span>
+            <span>{text('Workspace name', 'Tên không gian')}</span>
           </span>
           <input name="name" maxLength={120} required placeholder="e.g. Cognitive Neuroscience Lab" />
         </label>
         <button type="submit" disabled={pending} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
           <FolderPlus size={16} aria-hidden="true" />
-          <span>Create workspace</span>
+          <span>{text('Create workspace', 'Tạo không gian')}</span>
         </button>
       </form>
 
@@ -219,7 +221,7 @@ export function WorkspaceList({ initial }: { initial: Workspace[] }) {
                       style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
                     >
                       <Share2 size={14} aria-hidden="true" />
-                      <span>Sharing</span>
+                      <span>{text('Sharing', 'Chia sẻ')}</span>
                     </button>
                     <button
                       className="danger"
@@ -229,7 +231,7 @@ export function WorkspaceList({ initial }: { initial: Workspace[] }) {
                       style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
                     >
                       <Trash2 size={14} aria-hidden="true" />
-                      <span>Delete</span>
+                      <span>{text('Delete', 'Xóa')}</span>
                     </button>
                   </>
                 )}

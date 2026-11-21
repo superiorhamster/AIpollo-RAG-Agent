@@ -1,9 +1,11 @@
 'use client'
 
 import { useState, type FormEvent } from 'react'
+import { useWorkspaceLanguage } from '../components/workspace-language'
 import { api, errorMessage } from '../lib/api'
 
 export function ResetForm({ token }: { token?: string }) {
+  const { text } = useWorkspaceLanguage()
   const [pending, setPending] = useState(false)
   const [sent, setSent] = useState(false)
   const [error, setError] = useState('')
@@ -36,11 +38,11 @@ export function ResetForm({ token }: { token?: string }) {
   if (sent) {
     return (
       <div style={{ display: 'grid', gap: '0.75rem' }}>
-        <span className="badge badge-success">Request Processed</span>
+        <span className="badge badge-success">{text('Request processed', 'Đã xử lý yêu cầu')}</span>
         <p role="status">
           {token
-            ? 'Password changed. Sign in with your new password.'
-            : 'If this address can receive a reset link, check your email.'}
+            ? text('Password changed. Sign in with your new password.', 'Đã đổi mật khẩu. Đăng nhập bằng mật khẩu mới.')
+            : text('If this address can receive a reset link, check your email.', 'Nếu địa chỉ này có thể nhận liên kết đặt lại mật khẩu, vui lòng kiểm tra email.')}
         </p>
       </div>
     )
@@ -61,7 +63,7 @@ export function ResetForm({ token }: { token?: string }) {
 
       {token && (
         <label>
-          New password
+          {text('New password', 'Mật khẩu mới')}
           <input
             type="password"
             name="password"
@@ -77,7 +79,7 @@ export function ResetForm({ token }: { token?: string }) {
       {error && <p role="alert">{error}</p>}
 
       <button type="submit" disabled={pending}>
-        {token ? 'Update password' : 'Send reset link'}
+        {token ? text('Update password', 'Cập nhật mật khẩu') : text('Send reset link', 'Gửi liên kết đặt lại')}
       </button>
     </form>
   )

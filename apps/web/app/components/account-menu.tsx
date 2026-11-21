@@ -54,7 +54,7 @@ export function AccountMenu({ email, compact = false, admin = false, workspace =
           <DesignIcon name="search" />
           <input type="search" aria-label="Search workspaces and sources"
             aria-controls={searchOpen && query.trim() ? searchId : undefined}
-            placeholder={workspace ? text('Search workspaces, sources…', 'Tìm không gian, tài liệu…') : 'Search workspaces, sources…'} value={query}
+            placeholder={text('Search workspaces, sources…', 'Tìm không gian, tài liệu…')} value={query}
             onFocus={() => setSearchOpen(true)} onChange={event => {
               setQuery(event.currentTarget.value)
               setSearchOpen(true)
@@ -76,20 +76,20 @@ export function AccountMenu({ email, compact = false, admin = false, workspace =
         </div>
       )}
       <nav className="aipollo-account" aria-label="Account navigation">
-        {workspace && <WorkspaceLanguage />}
+        <WorkspaceLanguage label={workspace ? 'Workspace language' : 'Language'} />
         {admin && <span className="badge badge-neutral admin-private"><DesignIcon name="private" /> Private document content is hidden</span>}
         {compact ? (
           <details className="account-popover">
             <summary aria-label="Account menu" className={admin ? 'admin-avatar' : undefined}>{avatar}</summary>
             <div>
-              <Link href="/account">Account</Link>
-              <button type="button" className="ghost sm" disabled={pending} onClick={signOut}>Sign out</button>
+              <Link href="/account">{text('Account', 'Tài khoản')}</Link>
+              <button type="button" className="ghost sm" disabled={pending} onClick={signOut}>{text('Sign out', 'Đăng xuất')}</button>
             </div>
           </details>
         ) : (
           <>
-            <Link href="/account" className="button secondary sm">Account</Link>
-            <button type="button" className="secondary sm" disabled={pending} onClick={signOut}>Sign out</button>
+            <Link href="/account" className="button secondary sm">{text('Account', 'Tài khoản')}</Link>
+            <button type="button" className="secondary sm" disabled={pending} onClick={signOut}>{text('Sign out', 'Đăng xuất')}</button>
           </>
         )}
       </nav>

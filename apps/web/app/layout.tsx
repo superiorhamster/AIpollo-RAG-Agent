@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import type { ReactNode } from 'react'
 import './globals.css'
+import { GlobalLanguage } from './components/workspace-language'
 
 export const metadata: Metadata = {
   title: 'AIpollo · Super Agentic RAG',
@@ -9,7 +10,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body><GlobalLanguage />{children}</body>
     </html>
   )
 }

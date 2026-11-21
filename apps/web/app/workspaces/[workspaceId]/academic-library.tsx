@@ -17,9 +17,10 @@ const artifactTypes = {
 }
 const evidenceColumns = { source: 'Paper', method: 'Method', outcome: 'Outcome', limitations: 'Limitations' } as const
 
-export function AcademicLibrary({ workspace, view, onCitation }: {
+export function AcademicLibrary({ workspace, view, onCitation, openedArtifact }: {
   workspace: Workspace
   view?: 'artifacts' | 'references'
+  openedArtifact?: string
   onCitation: (target: CitationTarget) => void
 }) {
   const base = '/v1/workspaces/' + workspace.workspace_id
@@ -43,6 +44,15 @@ export function AcademicLibrary({ workspace, view, onCitation }: {
     })
     return () => { current = false }
   }, [base, view])
+
+  useEffect(() => {
+    if (view !== 'artifacts' || !openedArtifact) return
+    let current = true
+    void api<ArtifactDetail>(base + '/artifacts/' + openedArtifact).then(item => {
+      if (current) setOpened(item)
+    }).catch(failure => { if (current) setError(errorMessage(failure)) })
+    return () => { current = false }
+  }, [base, view, openedArtifact])
 
   function cite(item: Citation) {
     setActiveCitation(item.chunk_id)

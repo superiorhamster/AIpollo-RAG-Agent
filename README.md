@@ -71,8 +71,8 @@ Configure an OpenAI-compatible embedding endpoint in the local environment with 
 
 In **Library**, open **Search sources** and select documents to find passages. A result opens its page in the document viewer. With the provider disabled, uploads and previews stay available and indexing waits. Inspect a document's jobs via the existing document jobs API.
 
-The CPU parser has a 110-second document-processing deadline. A document that
-exceeds it can still be previewed, but indexing reports `parse_failed`; incomplete
+The CPU parser has a configurable 300-second document-processing deadline. A document that
+exceeds it can still be previewed, but indexing reports `parse_timeout`; incomplete
 extraction results are not published as searchable sources.
 
 For a local OpenAI-compatible endpoint on the Docker host, use http://host.docker.internal:PORT/v1 for both base URLs and enable MODEL_ALLOW_LOCAL_HTTP=true in the development environment.
@@ -155,3 +155,60 @@ The workspace assistant can generate cited learning, research and writing output
 Administrators can open **Administration** from the Account page to review service readiness, ingestion jobs, account access, audit events, and the active model configuration. Configure SMTP_HOST and SMTP_FROM for password-recovery email. Role and account availability changes revoke the affected sessions.
 
 See [Production on one Docker host](docs/operations/production.md) for the production overlay, digest validation, and backup and restore rehearsal.
+
+### Processing deadlines and recovery
+
+`DOCUMENT_PARSE_TIMEOUT_SECONDS` defaults to 300. A separate parsing subprocess
+is killed after that budget plus 30 seconds, or when its caller disconnects.
+Ingestion waits another 15 seconds; concurrent parser requests return `parser_busy`
+with `Retry-After` and remain subject to bounded ingestion retries. OCR is disabled:
+scanned PDFs without a text layer report `no_text` and can still be previewed.
+
+`MODEL_EMBEDDING_TIMEOUT_SECONDS` defaults to 60 and embedding callers allow another
+15 seconds. The Ollama overlay embeds one passage per request to bound CPU batch
+latency; it retains the selected model, vector dimensions and provider fingerprint.
+Chat calls retain their separate 25-second client deadline. Search has an explicit
+overall budget with longer gateway/BFF deadlines. `INDEX_JOB_TIMEOUT_SECONDS`
+defaults to 1800 (lease plus 60), and `RUN_TIMEOUT_SECONDS` to 210 (lease plus 15).
+Invalid combinations are rejected at startup. No partial index is published.
+For heavy PDFs on a 2-CPU machine, set `DOCUMENT_PARSE_TIMEOUT_SECONDS=600` in
+private `.env`; caller deadlines become 645 seconds automatically. The default
+remains 300. Graceful worker shutdown returns only its own unfinished lease to the
+queue without consuming an attempt or changing the published generation.
+
+After edits, rebuild/recreate with the same Compose overlay used to start the stack:
+
+```bash
+make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" up
+make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" reindex-embeddings
+make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" reindex-embeddings APPLY=1
+```
+
+The first reindex command is a dry run. Add `WORKSPACE_ID=<uuid>` to scope recovery.
+Changing `.env` without recreating the affected containers does not apply settings.
+Generation accepts strict JSON or a complete JSON code fence and validates current
+passage UUIDs/provenance. One budgeted regeneration is allowed. Persistent invalid
+output reports `invalid_model_output`, rather than insufficient evidence; Ask Retry
+keeps the original question, sources and private history snapshot.
+
+Origin protection, authentication throttling and explicit administrator promotion
+remain enabled. Tests must use their configured web origin and isolated accounts.
+There is no shared development admin password.
+
+### UI regression verification
+
+`make verify-ui` builds the production web image and runs seven Chromium cases
+against a synthetic gateway on an isolated Compose project. It covers registration
+confirmation/success, bilingual navigation, Retry-After, independent preview/index
+readiness, polling recovery, PDF controls and mobile layout, and exact artifact
+opening. No application databases or real model providers are used. Browser
+artifacts are retained under ignored `test-results/`. The real-provider PDF flow
+and Phase 01–03 suites remain separate verification gates.
+
+`make verify-local-rag` uses the configured real chat provider and local Ollama
+cache in a separate Compose project with independent databases and storage. It
+checks embedding/chat adapters and the bilingual retrieval corpus, generates a
+Vietnamese PDF, verifies indexing/search, asks a follow-up question,
+and opens the cited PDF page. Its own test data is removed afterwards. Run one
+full verification stack at a time on resource-limited hosts; retained main-project
+volumes and queued jobs are not part of the test.

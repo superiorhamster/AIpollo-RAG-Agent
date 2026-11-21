@@ -12,11 +12,12 @@ type Annotation = {
   region: Region | null
 }
 
-export function AnnotatedPreview({ documentUrl, page, citation, onPage }: {
+export function AnnotatedPreview({ documentUrl, page, citation, onPage, onClearCitation }: {
   documentUrl: string
   page: number
   citation?: CitationTarget
   onPage: (page: number) => void
+  onClearCitation: () => void
 }) {
   const [items, setItems] = useState<Annotation[]>([])
   const [selecting, setSelecting] = useState(false)
@@ -53,7 +54,7 @@ export function AnnotatedPreview({ documentUrl, page, citation, onPage }: {
   }
 
   return <>
-    <PdfPreview url={documentUrl + '/preview'} page={page} onPage={onPage} regions={regions} citationRegion={citation?.region ?? undefined}
+    <PdfPreview url={documentUrl + '/preview'} page={page} onPage={onPage} regions={regions} citationRegion={citation?.region ?? undefined} onClearCitation={onClearCitation}
       onRegion={selecting ? (region, selectedPage) => {
         setDraft({ page: selectedPage, region })
         setSelecting(false)

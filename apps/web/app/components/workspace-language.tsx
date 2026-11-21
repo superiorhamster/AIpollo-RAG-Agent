@@ -1,12 +1,13 @@
 'use client'
 
-import { useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
+import { usePathname } from 'next/navigation'
 
 const storageKey = 'aipollo-workspace-language'
 const languageEvent = 'aipollo-workspace-language-changed'
 type Language = 'en' | 'vi'
 
-function readLanguage(): Language {
+export function readLanguage(): Language {
   try {
     return window.localStorage.getItem(storageKey) === 'vi' ? 'vi' : 'en'
   } catch {
@@ -35,7 +36,7 @@ export function useWorkspaceLanguage() {
   }
 }
 
-export function WorkspaceLanguage() {
+export function WorkspaceLanguage({ label = 'Workspace language' }: { label?: string }) {
   const { language } = useWorkspaceLanguage()
 
   function choose(value: Language) {
@@ -45,8 +46,21 @@ export function WorkspaceLanguage() {
     } catch {}
   }
 
-  return <div className="workspace-language" role="group" aria-label="Workspace language">
+  return <div className="workspace-language" role="group" aria-label={label}>
     <button type="button" lang="en" aria-label="English" aria-pressed={language === 'en'} onClick={() => choose('en')}>EN</button>
     <button type="button" lang="vi" aria-label="Tiếng Việt" aria-pressed={language === 'vi'} onClick={() => choose('vi')}>VI</button>
+  </div>
+}
+
+export function Localized({ en, vi }: { en: string; vi: string }) {
+  return useWorkspaceLanguage().text(en, vi)
+}
+
+export function GlobalLanguage() {
+  const { language } = useWorkspaceLanguage()
+  const path = usePathname()
+  useEffect(() => { document.documentElement.lang = language }, [language])
+  return (path.startsWith('/workspaces') || path === '/account' || path.startsWith('/admin')) ? null : <div className="global-language">
+    <WorkspaceLanguage label="Language" />
   </div>
 }
