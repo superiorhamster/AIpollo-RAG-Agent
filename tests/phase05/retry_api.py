@@ -78,12 +78,16 @@ class RetryApi(unittest.IsolatedAsyncioTestCase):
             invalid = await self.client.post(self.route, headers={"Idempotency-Key": str(uuid4())}, json=body)
             self.assertEqual(invalid.status_code, 422, invalid.text)
 
-        failed = await self.seed(objective=self.objective | {"citation_mode": "segment"})
-        retry = await self.retry(failed)
-        self.assertEqual(retry.status_code, 202, retry.text)
-        self.assertEqual((await self.stored(retry.json()["run_id"]))["input"]["citation_mode"], "segment")
-        rejected = await self.retry(failed, body=first | {"retry_of_run_id": str(failed)})
-        self.assertEqual(rejected.status_code, 409)
+        for mode, switched in (("segment", "chunk"), ("chunk", "segment")):
+            with self.subTest(mode=mode):
+                failed = await self.seed(objective=self.objective | {"citation_mode": mode})
+                retry = await self.retry(failed)
+                self.assertEqual(retry.status_code, 202, retry.text)
+                self.assertEqual((await self.stored(retry.json()["run_id"]))["input"]["citation_mode"], mode)
+                rejected = await self.retry(failed, body=first | {
+                    "citation_mode": switched, "retry_of_run_id": str(failed),
+                })
+                self.assertEqual(rejected.status_code, 409)
 
     async def test_later_turns_and_repeated_retries_preserve_snapshot(self):
         history = [{"question": "Nói về phòng B4-201.", "answer": "Phòng B4-201."}]
