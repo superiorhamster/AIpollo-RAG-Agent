@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { expect, test } from '@playwright/test'
+import { expect, test, type APIResponse } from '@playwright/test'
 
 type Citation = { document_id: string; chunk_id: string; name: string; page: number; text: string; region?: number[] }
 type Claim = { text: string; citations: Citation[] }
@@ -17,8 +17,22 @@ test('real agentic paper coverage, verified drafting and personal learning', asy
   const evaluationDir = '/tests/test-results/evaluation'
   await mkdir(evaluationDir, { recursive: true })
   const origin = baseURL!
+  async function withSession(send: () => Promise<APIResponse>) {
+    let response = await send()
+    if (response.status() === 401) {
+      const renewed = await page.request.post('/v1/auth/refresh', { headers: { Origin: origin } })
+      expect(renewed.status()).toBe(204)
+      response = await send()
+    }
+    return response
+  }
+  const authed = {
+    get: (...args: Parameters<typeof page.request.get>) => withSession(() => page.request.get(...args)),
+    post: (...args: Parameters<typeof page.request.post>) => withSession(() => page.request.post(...args)),
+    delete: (...args: Parameters<typeof page.request.delete>) => withSession(() => page.request.delete(...args)),
+  }
   const headers = () => ({ Origin: origin, 'Idempotency-Key': randomUUID() })
-  const modelRuns: { case: string; mode: string; milliseconds: number; run: Run }[] = []
+  const modelRuns: { case: string; mode: string; milliseconds: number; poll_retries: number; run: Run }[] = []
   const factsA = 'Model Alpha uses a transformer encoder with sparse attention. Latency is 3 seconds per batch. Under protocol P with hardware Omega and seed 7, the shared baseline Model Gamma has accuracy 84%. The draft asserts that all encoders must use transformers, without a citation for this universal claim.'
   const factsB = 'Model Beta uses a recurrent encoder. The dataset is Vietnamese benchmark V2, containing 1200 annotated sequences. Latency is 2000 milliseconds per batch. Under protocol P with hardware Omega and seed 7, the shared baseline Model Gamma has accuracy 79%.'
   const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
@@ -42,40 +56,44 @@ test('real agentic paper coverage, verified drafting and personal learning', asy
   await page.getByLabel('Password', { exact: true }).fill('LiveTest12!')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect(page).toHaveURL(/\/workspaces$/, { timeout: 20000 })
-  const created = await page.request.post('/v1/workspaces', { headers: headers(), data: { name: 'Synthetic agentic quality evaluation' } })
+  const created = await authed.post('/v1/workspaces', { headers: headers(), data: { name: 'Synthetic agentic quality evaluation' } })
   expect(created.status()).toBe(201)
   const workspace = (await created.json()).workspace_id
   const base = `/v1/workspaces/${workspace}`
   const documents: string[] = []
   try {
     for (const [filename, data] of [['paper-a.pdf', aPdf], ['paper-b.pdf', bPdf]] as const) {
-      const response = await page.request.post(base + '/documents', { headers: { ...headers(), 'X-Filename': filename, 'Content-Type': 'application/octet-stream' }, data, timeout: 135000 })
+      const response = await authed.post(base + '/documents', { headers: { ...headers(), 'X-Filename': filename, 'Content-Type': 'application/octet-stream' }, data, timeout: 135000 })
       expect(response.status()).toBe(201)
       const document = (await response.json()).document_id
       documents.push(document)
       await expect.poll(async () => {
-        const jobs = await page.request.get(base + `/documents/${document}/jobs`, { timeout: 20000 })
+        const jobs = await authed.get(base + `/documents/${document}/jobs`, { timeout: 20000 })
         expect(jobs.status()).toBe(200)
         return (await jobs.json() as { kind: string; status: string }[]).find(job => job.kind === 'index')?.status
       }, { timeout: indexTimeout, intervals: [2000] }).toBe('succeeded')
     }
     async function run(mode: 'ASK' | 'AGENT', capability: string, task: string, query: string, scenario: string, extra = {}) {
       const before = Date.now()
-      const submitted = await page.request.post(base + '/runs', { headers: headers(), data: { mode, objective: { capability, task, query, document_ids: documents, ...extra } } })
+      const submitted = await authed.post(base + '/runs', { headers: headers(), data: { mode, objective: { capability, task, query, document_ids: documents, ...extra } } })
       expect(submitted.status()).toBe(202)
       const id = (await submitted.json()).run_id
       let completed: Run | undefined
+      let pollRetries = 0
       await expect.poll(async () => {
-        const response = await page.request.get(base + '/runs/' + id, { timeout: 20000 })
+        const response = await authed.get(base + '/runs/' + id, { timeout: 20000 })
+        if (response.status() === 503 && pollRetries < 3) { pollRetries += 1; return false }
         expect(response.status()).toBe(200)
         completed = await response.json()
         return completed && ['succeeded', 'failed', 'cancelled'].includes(completed.status)
       }, { timeout: runTimeout, intervals: [1000] }).toBeTruthy()
-      expect(completed?.status, JSON.stringify({ error_code: completed?.error_code })).toBe('succeeded')
       if (!completed) throw new Error('No terminal result')
+      await writeFile(evaluationDir + '/research-progress.json', JSON.stringify({ documents,
+        model_runs: [...modelRuns, { case: scenario, mode, milliseconds: Date.now() - before, poll_retries: pollRetries, run: completed }] }, null, 2))
+      expect(completed.status, JSON.stringify({ error_code: completed.error_code })).toBe('succeeded')
       const citations = [...completed.result.claims.flatMap(claim => claim.citations), ...(completed.result.evidence_matrix?.flatMap(cell => cell.citations) ?? [])]
       expect(citations.every(citation => documents.includes(citation.document_id) && citation.page >= 1)).toBeTruthy()
-      modelRuns.push({ case: scenario, mode, milliseconds: Date.now() - before, run: completed })
+      modelRuns.push({ case: scenario, mode, milliseconds: Date.now() - before, poll_retries: pollRetries, run: completed })
       return completed
     }
     const query = 'So sánh phương pháp, dataset và độ trễ của Paper A và Paper B. Giữ nguyên đơn vị được báo cáo; đánh dấu dữ liệu còn thiếu.'
@@ -106,23 +124,23 @@ test('real agentic paper coverage, verified drafting and personal learning', asy
     const cards = await run('ASK', 'LEARN', 'flashcards', 'Tạo hai flashcard về phương pháp Alpha và dataset V2.', 'flashcards')
     expect(cards.result.claims.length).toBeGreaterThan(0)
     async function save(completed: Run, name: string) {
-      const result = await page.request.post(base + '/artifacts', { headers: headers(), data: { run_id: completed.run_id, name } })
+      const result = await authed.post(base + '/artifacts', { headers: headers(), data: { run_id: completed.run_id, name } })
       expect(result.status()).toBe(201)
       return (await result.json()).artifact_id as string
     }
     const deck = await save(cards, 'Synthetic FSRS deck')
-    const due = await page.request.get(base + `/artifacts/${deck}/cards?due_only=true`)
+    const due = await authed.get(base + `/artifacts/${deck}/cards?due_only=true`)
     expect(due.status()).toBe(200)
     const card = (await due.json()).cards[0]
     const key = headers()
     const rating = { rating: 3, expected_version: card.version }
-    const reviewed = await page.request.post(base + `/artifacts/${deck}/cards/${card.card_id}/reviews`, { headers: key, data: rating })
+    const reviewed = await authed.post(base + `/artifacts/${deck}/cards/${card.card_id}/reviews`, { headers: key, data: rating })
     expect(reviewed.status()).toBe(200)
-    const replay = await page.request.post(base + `/artifacts/${deck}/cards/${card.card_id}/reviews`, { headers: key, data: rating })
+    const replay = await authed.post(base + `/artifacts/${deck}/cards/${card.card_id}/reviews`, { headers: key, data: rating })
     expect(await replay.json()).toEqual(await reviewed.json())
     const map = await run('ASK', 'LEARN', 'mind_map', 'Tạo sơ đồ khái niệm liên hệ encoder, transformer, recurrent encoder và các model Alpha/Beta.', 'concept_map')
     const mapId = await save(map, 'Synthetic concept graph')
-    const detail = await page.request.get(base + '/artifacts/' + mapId)
+    const detail = await authed.get(base + '/artifacts/' + mapId)
     expect(detail.status()).toBe(200)
     const graph = (await detail.json()).concept_map
     expect(graph.nodes.length).toBeGreaterThan(0)
@@ -137,6 +155,6 @@ test('real agentic paper coverage, verified drafting and personal learning', asy
     console.log('AGENTIC_LIVE_METRICS', JSON.stringify({ matrix_cells: report.matrix_cells, verified_cells: report.verified_matrix_cells,
       baseline_cited_papers: report.baseline_cited_papers, latency_p50_ms: report.latency_p50_ms, latency_p95_ms: report.latency_p95_ms, model_runs: modelRuns.length }))
   } finally {
-    expect((await page.request.delete(base, { headers: { Origin: origin } })).status()).toBe(202)
+    expect((await authed.delete(base, { headers: { Origin: origin } })).status()).toBe(202)
   }
 })

@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 data=json.loads(Path(sys.argv[1]).read_text())
-requests={item['run']['request_id']:{'case':item['case'],'mode':item['mode'],'completion_calls':0,'embedding_calls':0,'search_calls':0} for item in data['model_runs']}
+requests={item['run']['request_id']:{'case':item['case'],'mode':item['mode'],'poll_retries':item.get('poll_retries',0),'completion_calls':0,'embedding_calls':0,'search_calls':0} for item in data['model_runs']}
 for line in Path(sys.argv[2]).read_text(errors='replace').splitlines():
     start=line.find('{')
     if start<0:continue
