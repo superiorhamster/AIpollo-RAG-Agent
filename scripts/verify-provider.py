@@ -35,7 +35,11 @@ with httpx.Client(base_url="http://127.0.0.1:8000/internal/v1", timeout=35, trus
         ],
         "max_tokens": 2048,
     })
-    answer = response.raise_for_status().json()["text"].strip()
+    if response.status_code != 200:
+        raise SystemExit(f"Chat provider smoke failed (HTTP {response.status_code}). "
+                         "Check provider availability, account quota and the configured chat model; "
+                         "service readiness alone does not verify live generation.")
+    answer = response.json()["text"].strip()
     fence = chr(96) * 3
     if answer.startswith(fence + "json") and answer.endswith(fence):
         answer = answer[7:-3].strip()

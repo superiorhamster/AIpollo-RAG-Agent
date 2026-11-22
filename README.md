@@ -314,3 +314,27 @@ For compatible chat providers that support JSON object response mode, set
 `MODEL_CHAT_RESPONSE_FORMAT=json_object`. It is omitted by default. This requests
 valid JSON; backend schema, citation and source checks still apply. Unsupported
 providers should leave it empty. See the [response format API contract](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+
+
+### Smoke test the running stack
+
+Start the normal development stack, then run:
+
+```bash
+make COMPOSE_FILES='compose.dev.yaml compose.ollama.yaml' verify-smoke
+```
+
+This Linux Docker browser runner reads `WEB_ORIGIN` from the running web container
+and checks registration/login, access renewal, protected APIs, upload/indexing,
+scoped search, the PDF reader, exact Plan acceptance/version rules, grounded Ask
+and citation navigation. It uses synthetic content on the existing stack. Its
+workspace is deleted and its session revoked; the synthetic account record remains
+because the application has no public account-deletion API. Each run uses a unique
+account. Existing users, workspaces, feature flags and provider settings are preserved.
+
+Stage results and failure screenshots/traces are saved under
+`test-results/rag-smoke-*-browser/`. Generation failure makes the command fail even
+when core checks pass. `make verify` checks local service HTTP readiness;
+`make verify-provider` separately checks actual embedding/chat calls. A router can
+advertise a model whose backend accounts are unavailable or rate-limited. Check
+that provider's available accounts/quota before changing the RAG application.

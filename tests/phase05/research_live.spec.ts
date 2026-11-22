@@ -67,11 +67,13 @@ test('real agentic paper coverage, verified drafting and personal learning', asy
       expect(response.status()).toBe(201)
       const document = (await response.json()).document_id
       documents.push(document)
+      let indexingReadRetries = 0
       await expect.poll(async () => {
         const jobs = await authed.get(base + `/documents/${document}/jobs`, { timeout: 20000 })
+        if (jobs.status() === 503 && indexingReadRetries < 3) { indexingReadRetries += 1; return 'unavailable' }
         expect(jobs.status()).toBe(200)
         return (await jobs.json() as { kind: string; status: string }[]).find(job => job.kind === 'index')?.status
-      }, { timeout: indexTimeout, intervals: [2000] }).toBe('succeeded')
+      }, { timeout: indexTimeout, intervals: [2000, 4000] }).toBe('succeeded')
     }
     async function run(mode: 'ASK' | 'AGENT', capability: string, task: string, query: string, scenario: string, extra = {}) {
       const before = Date.now()

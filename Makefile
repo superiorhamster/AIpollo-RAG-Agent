@@ -105,3 +105,7 @@ verify-formulas: env
 .PHONY: verify-agentic-research
 verify-agentic-research: env
 	@LOCAL_RAG_SCENARIO=research bash scripts/verify-local-rag.sh
+
+.PHONY: verify-smoke
+verify-smoke: env
+	@bash scripts/verify-smoke.sh
