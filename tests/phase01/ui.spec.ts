@@ -129,3 +129,80 @@ test('status polling reports transient failure and recovers with backoff', async
   await expect(page.getByRole('checkbox', { name: 'ready.pdf', exact: true })).toBeEnabled({ timeout: 10000 })
   await expect(page.getByText('Could not update document status. Retrying with backoff.', { exact: true })).toHaveCount(0)
 })
+
+test('custom activities create a reviewable new plan version', async ({ page }) => {
+  let version = 1
+  const document = '44444444-4444-4444-8444-444444444444'
+  const planId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const objective = { query: 'Learn attention in three days', document_ids: [document], capability: 'LEARN', task: 'study_guide' }
+  let steps: { tool: string; action: string; objective?: typeof objective }[] = [
+    { tool: 'retrieve', action: 'Find the attention section' }, { tool: 'compose', action: 'Explain attention' },
+  ]
+  await page.route(/\/plans(?:\/[^/?]+)?(?:\?.*)?$/, route => {
+    const request = route.request()
+    if (request.method() === 'PATCH') {
+      const body = request.postDataJSON()
+      expect(body.expected_version).toBe(1)
+      expect(body.steps).toHaveLength(3)
+      expect(new Set(body.steps.map((step: { step_id: string }) => step.step_id)).size).toBe(3)
+      steps = body.steps
+      version = 2
+    }
+    return route.fulfill({ status: request.method() === 'POST' ? 201 : 200, contentType: 'application/json', body: JSON.stringify({
+      plan_id: planId, plan_version: version, objective, steps, expected_outputs: ['Cited explanation'], state: 'REVIEW', accepted_at: null,
+    }) })
+  })
+  const workspacePage = new WorkspacePage(page)
+  await workspacePage.open()
+  await page.getByRole('checkbox', { name: 'ready.pdf', exact: true }).check()
+  const assistant = page.getByRole('region', { name: 'Workspace assistant' })
+  await assistant.getByRole('button', { name: 'Plan', exact: true }).click()
+  await assistant.getByLabel('Question or objective').fill(objective.query)
+  await assistant.getByRole('button', { name: 'Create plan', exact: true }).click()
+  await assistant.getByRole('button', { name: 'Customize activities', exact: true }).click()
+  await assistant.getByRole('button', { name: 'Add activity', exact: true }).click()
+  const source = assistant.getByRole('checkbox', { name: 'Activity source 3: ready.pdf', exact: true })
+  await source.uncheck()
+  await assistant.getByRole('button', { name: 'Save as new version', exact: true }).click()
+  await expect(assistant.getByText('Choose at least one source for each activity.', { exact: true })).toBeVisible()
+  await source.check()
+  await assistant.getByRole('button', { name: 'Save as new version', exact: true }).click()
+  await expect(assistant.getByRole('heading', { name: 'Plan version 2' })).toBeVisible()
+  await expect(assistant.getByRole('button', { name: 'Accept plan', exact: true })).toBeVisible()
+})
+
+test('Socratic tutor keeps source scope for hints and solutions', async ({ page }) => {
+  const document = '44444444-4444-4444-8444-444444444444'
+  const conversation = '88888888-8888-4888-8888-888888888888'
+  let current: object = {}
+  let turns = 0
+  await page.route(/\/runs$/, route => {
+    const body = route.request().postDataJSON()
+    expect(body.objective.task).toBe('socratic_tutor')
+    expect(body.objective.document_ids).toEqual([document])
+    if (turns > 0) expect(body.conversation_id).toBe(conversation)
+    turns += 1
+    current = {
+      run_id: `66666666-6666-4666-8666-${String(turns).padStart(12, '0')}`, interaction: 'ASK', conversation_id: conversation,
+      status: 'succeeded', step: 'compose', plan_id: null, plan_version: null, error_code: null,
+      query: body.objective.query, objective: body.objective, updated_at: new Date().toISOString(),
+      result: { kind: 'socratic_tutor', insufficient_evidence: false, claims: [{ text: 'The demo starts at 14:00.', citations: [] }],
+        tutor_question: body.objective.tutor_action === 'solution' ? null : body.objective.tutor_action === 'hint' ? 'Em cần trừ hay cộng?' : 'Em sẽ bắt đầu từ dữ kiện nào?' },
+    }
+    return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify(current) })
+  })
+  await page.route(/\/runs\/[^/]+\/events$/, route => route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'data: ' + JSON.stringify(current) + '\n\n' }))
+  const workspacePage = new WorkspacePage(page)
+  await workspacePage.open()
+  await page.getByRole('checkbox', { name: 'ready.pdf', exact: true }).check()
+  const assistant = page.getByRole('region', { name: 'Workspace assistant' })
+  await expect(assistant.getByLabel('Output').getByRole('option', { name: 'Socratic tutor' })).toHaveCount(1)
+  await assistant.getByLabel('Output').selectOption('socratic_tutor')
+  await assistant.getByLabel('Question or objective').fill('Hãy hướng dẫn tôi tính thời gian đăng ký.')
+  await assistant.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(assistant.getByText('Em sẽ bắt đầu từ dữ kiện nào?', { exact: true })).toBeVisible()
+  await assistant.getByRole('button', { name: 'More hints', exact: true }).last().click()
+  await expect(assistant.getByText('Em cần trừ hay cộng?', { exact: true })).toBeVisible()
+  await assistant.getByRole('button', { name: 'Show solution', exact: true }).last().click()
+  await expect.poll(() => turns).toBe(3)
+})

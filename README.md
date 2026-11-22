@@ -197,7 +197,7 @@ There is no shared development admin password.
 
 ### UI regression verification
 
-`make verify-ui` builds the production web image and runs seven Chromium cases
+`make verify-ui` builds the production web image and runs nine Chromium cases
 against a synthetic gateway on an isolated Compose project. It covers registration
 confirmation/success, bilingual navigation, Retry-After, independent preview/index
 readiness, polling recovery, PDF controls and mobile layout, and exact artifact
@@ -212,3 +212,17 @@ Vietnamese PDF, verifies indexing/search, asks a follow-up question,
 and opens the cited PDF page. Its own test data is removed afterwards. Run one
 full verification stack at a time on resource-limited hosts; retained main-project
 volumes and queued jobs are not part of the test.
+
+### Opt-in reviewed workflows and tutoring
+
+Set `AGENTIC_WORKFLOW_ENABLED=true` and/or `AGENTIC_TUTOR_ENABLED=true` in private
+`.env`, then recreate with your existing Compose overlay and `make up`. The
+orchestration migration preserves historical plans and their approvals.
+**Customize activities** saves a new plan version with up to six source-scoped
+activities. Review and Accept that version before execution. Per-activity progress
+and cited results are available in the assistant and `GET /v1/workspaces/{id}/runs/{run}/steps`.
+**Socratic tutor** is an Ask/Learn task with **More hints** and **Show solution**
+actions. Tutor questions stay in the private conversation history.
+Feature availability comes from the authenticated `workflow-features` endpoint.
+These flags default to false. Curriculum generation and the later Agentic RAG
+milestones are tracked in `harness/build/change-20261121-agentic-rag.md`.

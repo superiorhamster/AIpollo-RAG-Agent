@@ -4,18 +4,18 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, StringConstraints, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator, model_serializer
 
 from rag_index import Chunk, SourceSelection
 
 Capability = Literal["LEARN", "RESEARCH", "WRITE"]
 Task = Literal[
-    "answer", "explanation", "study_guide", "quiz", "flashcards", "mind_map",
+    "answer", "explanation", "study_guide", "quiz", "flashcards", "mind_map", "socratic_tutor",
     "comparison", "screening", "extraction", "evidence_table", "synthesis",
     "draft", "rewrite", "summary", "citation_review",
 ]
 TASKS = {
-    "LEARN": {"answer", "explanation", "study_guide", "quiz", "flashcards", "mind_map"},
+    "LEARN": {"socratic_tutor", "answer", "explanation", "study_guide", "quiz", "flashcards", "mind_map"},
     "RESEARCH": {"answer", "comparison", "screening", "extraction", "evidence_table", "synthesis"},
     "WRITE": {"answer", "draft", "rewrite", "summary", "citation_review"},
 }
@@ -26,15 +26,54 @@ class Objective(SourceSelection):
     query: Query
     capability: Capability = "LEARN"
     task: Task = "answer"
+    tutor_action: Literal["guide", "hint", "solution"] | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_objective(self, handler):
+        data = handler(self)
+        if self.tutor_action is None:
+            data.pop("tutor_action", None)
+        return data
 
     @model_validator(mode="after")
     def valid_capability(self):
+        if self.tutor_action is not None and self.task != "socratic_tutor":
+            raise ValueError("Tutor actions require the Socratic task")
         if self.task not in TASKS[self.capability]:
             raise ValueError("Choose a task for the selected capability")
         return self
 
 
-class EditPlan(Objective):
+class WorkflowStep(BaseModel, extra="forbid"):
+    step_id: UUID
+    tool: Literal["retrieve", "compose"]
+    action: str = Field(min_length=2, max_length=600)
+    objective: Objective
+    expected_output: str = Field(min_length=2, max_length=600)
+
+
+class PlanDefinition(Objective):
+    steps: list[WorkflowStep] | None = Field(default=None, min_length=1, max_length=6)
+
+    @model_validator(mode="after")
+    def validate_steps(self):
+        if self.task == "socratic_tutor" or any(step.objective.task == "socratic_tutor" for step in self.steps or []):
+            raise ValueError("Socratic tutoring requires an Ask conversation")
+        if self.steps is None:
+            return self
+        if len({step.step_id for step in self.steps}) != len(self.steps):
+            raise ValueError("Step IDs must be unique")
+        for step in self.steps:
+            if step.objective.capability != self.capability:
+                raise ValueError("Step capability must match the plan")
+            if not set(step.objective.document_ids).issubset(self.document_ids):
+                raise ValueError("Step sources must belong to the plan")
+        if self.steps[-1].tool != "compose":
+            raise ValueError("A workflow must finish with a composed output")
+        return self
+
+
+class EditPlan(PlanDefinition):
     expected_version: int = Field(ge=1)
 
 
@@ -57,6 +96,8 @@ class StartRun(BaseModel):
                 raise ValueError("Plan runs require a plan and version")
         elif self.objective is None or self.plan_id is not None or self.plan_version is not None:
             raise ValueError("Direct runs require an objective")
+        if self.objective and self.objective.task == "socratic_tutor" and self.mode != "ASK":
+            raise ValueError("Socratic tutoring requires Ask mode")
         if self.mode != "ASK" and self.conversation_id is not None:
             raise ValueError("Only Ask accepts a conversation")
         if self.mode != "ASK" and self.retry_of_run_id is not None:
@@ -100,6 +141,10 @@ class GeneratedAskAnswer(BaseModel):
     claims: list[AskClaim] = Field(max_length=12)
 
 
+class GeneratedTutorAnswer(GeneratedAskAnswer):
+    question: str | None = Field(default=None, min_length=2, max_length=600)
+
+
 class SearchRewrite(BaseModel, extra="forbid"):
     query: Query
 
@@ -118,6 +163,7 @@ class CitedClaim(BaseModel):
 
 
 class Answer(BaseModel):
+    tutor_question: str | None = None
     kind: Task = "answer"
     claims: list[CitedClaim]
     insufficient_evidence: bool
@@ -142,6 +188,20 @@ class RunView(BaseModel):
     updated_at: datetime
 
 
+class StepResult(BaseModel):
+    cost: int = Field(ge=0)
+    answer: Answer | None = None
+    evidence: list[Citation] | None = None
+
+
+class RunStepView(BaseModel):
+    step_id: UUID
+    position: int = Field(ge=0, le=5)
+    status: Literal["running", "succeeded"]
+    result: StepResult | None
+    updated_at: datetime
+
+
 class Step(BaseModel):
     tool: str
     action: str
@@ -153,7 +213,7 @@ class PlanView(BaseModel):
     objective: Objective
     accepted_at: datetime | None
     state: Literal["REVIEW", "ACCEPTED", "CANCELLED"]
-    steps: list[Step]
+    steps: list[Step | WorkflowStep]
     expected_outputs: list[str]
 
 

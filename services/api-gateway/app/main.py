@@ -54,11 +54,12 @@ WORKSPACE_PATHS = (
     (re.compile(rf"workspaces/{UUID_PATH}/members/{UUID_PATH}"), ("PUT", "DELETE")),
 )
 INTERACTION_PATHS = (
+    (re.compile(rf"workspaces/{UUID_PATH}/workflow-features"), ("GET",)),
     (re.compile(rf"workspaces/{UUID_PATH}/(?:plans|runs)"), ("POST",)),
     (re.compile(rf"workspaces/{UUID_PATH}/plans/{UUID_PATH}"), ("GET", "PATCH")),
     (re.compile(rf"workspaces/{UUID_PATH}/plans/{UUID_PATH}/(?:accept|regenerate|cancel)"), ("POST",)),
     (re.compile(rf"workspaces/{UUID_PATH}/runs/{UUID_PATH}/cancel"), ("POST",)),
-    (re.compile(rf"workspaces/{UUID_PATH}/runs/{UUID_PATH}(?:/events)?"), ("GET",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/runs/{UUID_PATH}(?:/events|/steps)?"), ("GET",)),
     (re.compile(rf"workspaces/{UUID_PATH}/conversations(?:/{UUID_PATH})?"), ("GET",)),
 )
 WORKSPACE_SEARCH = re.compile(rf"workspaces/{UUID_PATH}/search")

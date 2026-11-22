@@ -16,6 +16,7 @@ class CompletionRetry(unittest.IsolatedAsyncioTestCase):
 
         def upstream(request):
             calls.append(json.loads(request.content))
+            self.assertIs(calls[-1]['stream'], False)
             status = statuses[len(calls) - 1]
             if status is None:
                 raise httpx.ReadTimeout("fixture timeout", request=request)

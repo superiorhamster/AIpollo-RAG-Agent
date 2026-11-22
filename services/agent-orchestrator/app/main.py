@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from rag_db import database_ready, install_database_errors, open_database
 from rag_http import ACCESS_COOKIE, ACCESS_FORMAT, ApiError, health_response, install_http, request_id, require_service, unauthorized, unavailable
 
-from .types import Conversation, EditPlan, Objective, PlanView, RunView, StartRun, Version
+from .types import Conversation, EditPlan, Objective, PlanDefinition, PlanView, RunView, RunStepView, StartRun, Version
 from .history import input_limit, prior_history
 from .worker import ASK_COMPLETION_UNAVAILABLE, Worker, authorize
 
@@ -64,7 +64,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/readyz")
 async def readiness() -> Response:
-    return health_response(SERVICE, await database_ready(app.state.database, "orchestration", "orchestration_002"))
+    return health_response(SERVICE, await database_ready(app.state.database, "orchestration", "orchestration_004"))
 
 
 def missing() -> ApiError:
@@ -98,6 +98,8 @@ Actor = Annotated[UUID, Depends(actor)]
 def digest(payload) -> str:
     # Preserve existing idempotency hashes for requests predating retry parents.
     exclude = {"retry_of_run_id"} if isinstance(payload, StartRun) and payload.retry_of_run_id is None else None
+    if isinstance(payload, PlanDefinition) and payload.steps is None:
+        exclude = {"steps"}
     return hashlib.sha256(payload.model_dump_json(exclude=exclude).encode()).hexdigest()
 
 
@@ -118,7 +120,7 @@ async def owned_plan(connection: AsyncConnection, keys: dict, lock: bool = False
 
 async def plan_payload(connection: AsyncConnection, plan) -> dict:
     result = await connection.execute(text("""
-        SELECT v.input, a.accepted_at FROM orchestration.plan_versions v
+        SELECT v.input, v.workflow, a.accepted_at FROM orchestration.plan_versions v
         LEFT JOIN orchestration.acceptances a ON a.plan_id = v.plan_id AND a.version = v.version
         WHERE v.plan_id=:id AND v.version=:version
     """), {"id": plan["plan_id"], "version": plan["current_version"]})
@@ -126,21 +128,25 @@ async def plan_payload(connection: AsyncConnection, plan) -> dict:
     return {"plan_id": plan["plan_id"], "plan_version": plan["current_version"],
             "state": "CANCELLED" if plan["cancelled"] else "ACCEPTED" if revision["accepted_at"] else "REVIEW",
             "objective": revision["input"], "accepted_at": revision["accepted_at"],
-            "steps": [
+            "steps": revision["workflow"] or [
                 {"tool": "retrieve", "action": "Search the selected workspace sources."},
                 {"tool": "compose", "action": "Write a grounded answer with verified source links."},
-            ], "expected_outputs": ["Answer with citations or an insufficient-evidence result"]}
+            ], "expected_outputs": ([step["expected_output"] for step in revision["workflow"]]
+                                 if revision["workflow"] else ["Answer with citations or an insufficient-evidence result"])}
 
 
-async def add_revision(connection: AsyncConnection, plan_id: UUID, version: int, objective: Objective) -> None:
+async def add_revision(connection: AsyncConnection, plan_id: UUID, version: int, objective: PlanDefinition) -> None:
     await connection.execute(text("""
-        INSERT INTO orchestration.plan_versions (plan_id, version, input)
-        VALUES (:id, :version, CAST(:input AS jsonb))
-    """), {"id": plan_id, "version": version, "input": objective.model_dump_json()})
+        INSERT INTO orchestration.plan_versions (plan_id, version, input, workflow)
+        VALUES (:id, :version, CAST(:input AS jsonb), CAST(:workflow AS jsonb))
+    """), {"id": plan_id, "version": version, "input": Objective.model_validate(objective.model_dump()).model_dump_json(),
+            "workflow": json.dumps([step.model_dump(mode="json") for step in objective.steps]) if objective.steps else None})
 
 
 @app.post(BASE + "/plans", status_code=201, response_model=PlanView)
-async def create_plan(workspace_id: UUID, data: Objective, key: Key, user_id: Actor, request: Request):
+async def create_plan(workspace_id: UUID, data: PlanDefinition, key: Key, user_id: Actor, request: Request):
+    if data.steps and os.environ.get("AGENTIC_WORKFLOW_ENABLED") != "true":
+        raise ApiError(409, "feature_disabled", "Custom workflows are not enabled.")
     keys = scope(workspace_id, user_id, uuid4())
     async with app.state.database.begin() as connection:
         created = await connection.scalar(text("""
@@ -168,14 +174,20 @@ async def get_plan(workspace_id: UUID, plan_id: UUID, user_id: Actor):
         return await plan_payload(connection, plan)
 
 
-async def revise(workspace_id: UUID, plan_id: UUID, expected: int, user_id: UUID, incoming: Objective | None):
+async def revise(workspace_id: UUID, plan_id: UUID, expected: int, user_id: UUID, incoming: PlanDefinition | None):
     keys = scope(workspace_id, user_id, plan_id)
     async with app.state.database.begin() as connection:
         plan = await owned_plan(connection, keys, lock=True)
         if plan["cancelled"] or plan["current_version"] != expected:
             raise stale()
         old = await plan_payload(connection, plan)
-        objective = incoming or Objective.model_validate(old["objective"])
+        values = incoming.model_dump() if incoming else old["objective"]
+        if values.get("steps") is None and "step_id" in old["steps"][0]:
+            values = {**values, "steps": old["steps"]}
+        try:
+            objective = PlanDefinition.model_validate(values)
+        except ValueError as exc:
+            raise ApiError(422, "invalid_plan", "Adjust the activities to match the new capability and source scope.") from exc
         await add_revision(connection, plan_id, expected + 1, objective)
         await connection.execute(text("UPDATE orchestration.plans SET current_version=:version WHERE plan_id=:id"),
                                  {"version": expected + 1, "id": plan_id})
@@ -184,8 +196,10 @@ async def revise(workspace_id: UUID, plan_id: UUID, expected: int, user_id: UUID
 
 @app.patch(BASE + "/plans/{plan_id}", response_model=PlanView)
 async def edit_plan(workspace_id: UUID, plan_id: UUID, data: EditPlan, user_id: Actor):
+    if data.steps and os.environ.get("AGENTIC_WORKFLOW_ENABLED") != "true":
+        raise ApiError(409, "feature_disabled", "Custom workflows are not enabled.")
     return await revise(workspace_id, plan_id, data.expected_version, user_id,
-                        Objective.model_validate(data.model_dump()))
+                        PlanDefinition.model_validate(data.model_dump()))
 
 
 @app.post(BASE + "/plans/{plan_id}/regenerate", response_model=PlanView)
@@ -230,6 +244,8 @@ async def pinned_objective(connection: AsyncConnection, data: StartRun, workspac
     if plan["cancelled"] or plan["current_version"] != data.plan_version:
         raise stale()
     payload = await plan_payload(connection, plan)
+    if any("step_id" in step for step in payload["steps"]) and os.environ.get("AGENTIC_WORKFLOW_ENABLED") != "true":
+        raise ApiError(409, "feature_disabled", "Custom workflows are not enabled.")
     if payload["state"] != "ACCEPTED":
         raise ApiError(409, "plan_not_accepted", "Accept this plan version before starting.")
     return Objective.model_validate(payload["objective"])
@@ -285,6 +301,8 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
                 raise ApiError(409, "idempotency_conflict", "The request key is already used.")
             return {name: value for name, value in replay.items() if name != "request_hash"}
         objective = await pinned_objective(connection, data, workspace_id, user_id)
+        if objective.task == "socratic_tutor" and os.environ.get("AGENTIC_TUTOR_ENABLED") != "true":
+            raise ApiError(409, "feature_disabled", "Socratic tutoring is not enabled.")
         conversation = data.conversation_id
         history = None
         if data.retry_of_run_id is not None:
@@ -415,5 +433,23 @@ async def artifact_run(workspace_id: UUID, user_id: UUID, run_id: UUID, request:
         result = payload["result"]
         if result:
             claims = [claim for claim in result["claims"] if claim.get("source") != "conversation"]
-            payload["result"] = {**result, "claims": claims, "insufficient_evidence": not claims}
+            public_result = {key: value for key, value in result.items() if key != "tutor_question"}
+            payload["result"] = {**public_result, "claims": claims, "insufficient_evidence": not claims}
         return payload
+
+
+@app.get(BASE + "/runs/{run_id}/steps", response_model=list[RunStepView])
+async def get_run_steps(workspace_id: UUID, run_id: UUID, user_id: Actor):
+    async with app.state.database.connect() as connection:
+        await read_run(connection, scope(workspace_id, user_id, run_id))
+        rows = await connection.execute(text("""
+            SELECT step_id, position, status, result, updated_at
+            FROM orchestration.run_steps WHERE run_id=:run ORDER BY position
+        """), {"run": run_id})
+        return [dict(row) for row in rows.mappings()]
+
+
+@app.get(BASE + "/workflow-features")
+async def workflow_features(workspace_id: UUID, user_id: Actor):
+    return {"custom_plan": os.environ.get("AGENTIC_WORKFLOW_ENABLED") == "true",
+            "socratic_tutor": os.environ.get("AGENTIC_TUTOR_ENABLED") == "true"}

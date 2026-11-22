@@ -3,6 +3,7 @@
 import hashlib
 import sys
 import time
+from rag_runtime import RuntimeBudgets
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -13,7 +14,10 @@ ACCOUNT = {"email": "phase03@example.com", "password": "Phase3!a"}
 COLLECTION = "rag_chunks_" + hashlib.sha256(b"rag-test-embedding-v1").hexdigest()
 
 
-def wait_for(check, accepts, timeout=110):
+def wait_for(check, accepts, timeout=None):
+    if timeout is None:
+        budgets = RuntimeBudgets.from_env()
+        timeout = budgets.parse_caller + 2 * budgets.embedding_caller
     until = time.monotonic() + timeout
     while time.monotonic() < until:
         value = check()

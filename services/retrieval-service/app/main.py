@@ -13,9 +13,9 @@ from fastapi import FastAPI, Request, Response
 
 from rag_http import ApiError, health_response, install_http, request_id, require_service, unauthorized, unavailable
 from rag_runtime import RuntimeBudgets
-from rag_index import MAX_CHUNKS, EmbeddingConfig, IndexBatch
+from rag_index import MAX_CHUNKS, EmbeddingConfig, IndexBatch, SourceSelection
 
-from .search import SearchRequest, SearchResult, delegated_search, search
+from .search import SearchRequest, SearchResult, delegated_search, delegated_sources, search
 
 SERVICE = "retrieval-service"
 PREFIX = "rag_chunks_"
@@ -167,4 +167,16 @@ async def worker_search(workspace_id: UUID, user_id: UUID, data: SearchRequest, 
         async with asyncio.timeout(RuntimeBudgets.from_env().search):
             return await delegated_search(workspace_id, user_id, data, request, app.state.services, app.state.qdrant)
     except TimeoutError as exc:
+        raise unavailable() from exc
+
+
+@app.post("/internal/v1/workspaces/{workspace_id}/users/{user_id}/validate-sources", include_in_schema=False)
+async def validate_sources(workspace_id: UUID, user_id: UUID, data: SourceSelection, request: Request):
+    require_service(request, "X-Interaction-Service-Token", os.environ["RETRIEVAL_INTERACTION_TOKEN"])
+    try:
+        names = await delegated_sources(workspace_id, user_id, request, app.state.services)
+        if set(data.document_ids) - names.keys():
+            raise ApiError(404, "not_found", "A selected source is no longer available.")
+        return Response(status_code=204)
+    except httpx.HTTPError as exc:
         raise unavailable() from exc

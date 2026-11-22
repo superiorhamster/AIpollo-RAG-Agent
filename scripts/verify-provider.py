@@ -33,7 +33,7 @@ with httpx.Client(base_url="http://127.0.0.1:8000/internal/v1", timeout=35, trus
                                           "with keys observations (number) and source_id (string)."},
             {"role": "user", "content": json.dumps({"source_id": identifier, "text": source})},
         ],
-        "max_tokens": 140,
+        "max_tokens": 2048,
     })
     answer = response.raise_for_status().json()["text"].strip()
     fence = chr(96) * 3

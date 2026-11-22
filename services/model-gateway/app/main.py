@@ -246,7 +246,8 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
     started = perf_counter()
     response = None
     headers = {"Authorization": "Bearer " + key, "X-Request-ID": request_id(request)}
-    body = {"model": model, "max_tokens": data.max_tokens, "messages": [item.model_dump() for item in data.messages]}
+    body = {"model": model, "max_tokens": data.max_tokens, "stream": False,
+            "messages": [item.model_dump() for item in data.messages]}
     try:
         # The Ask worker waits up to 30 seconds. Bound both attempts together.
         async with asyncio.timeout(28 if data.retry_on_unavailable else None):

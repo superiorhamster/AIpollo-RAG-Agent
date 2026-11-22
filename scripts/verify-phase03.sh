@@ -36,12 +36,16 @@ run_check() {
 "${compose[@]}" up --build --wait --wait-timeout "${VERIFY_WAIT_TIMEOUT:-300}" web
 "${compose[@]}" run --rm --no-deps -T document-parser python - < tests/phase03/parser.py
 "${compose[@]}" run --rm --no-deps -T document-parser python - < tests/phase03/parser_lifecycle.py
+"${compose[@]}" stop agent-orchestrator
+"${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \
+  agent-orchestrator python /tests/phase05/workflows.py
 "${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \
   agent-orchestrator python /tests/phase05/history_ask.py
 "${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \
   agent-orchestrator python /tests/phase05/retry_api.py
 "${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \
   ingestion-service python /tests/phase03/reindex.py
+"${compose[@]}" up --no-deps --wait --wait-timeout 60 agent-orchestrator
 read -r workspace_id pdf_id docx_id <<< "$(run_check seed)"
 MODEL_PROVIDER=fixture "${compose[@]}" up --no-deps --wait --wait-timeout 60 model-gateway
 "${compose[@]}" run --rm --no-deps -T -v "$PWD/tests:/tests:ro" \

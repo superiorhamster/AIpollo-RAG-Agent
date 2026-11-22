@@ -74,7 +74,7 @@ class InMemoryRuns:
                         if row["workspace_id"] == params["workspace"] and row["user_id"] == params["user"]
                         and row["conversation_id"] == params["conversation"] and row["status"] == "succeeded"
                         and row["created_at"] < params["created"]]
-            return [(row["input"]["query"], [item["text"] for item in row["result"]["claims"]])
+            return [(row["input"]["query"], [item["text"] for item in row["result"]["claims"]], row["result"].get("tutor_question"))
                     for row in matching[:6]]
         if "SET status=:status" in sql:
             row = next(row for row in self.rows if row["run_id"] == params["run"])
@@ -273,6 +273,34 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
             await worker.compose(self.new_run(Q1), [SCHEDULE], [], 1)
         self.assertEqual(caught.exception.code, "cost_limit")
         worker.complete.assert_not_called()
+    async def test_socratic_three_turns_keep_questions_and_current_citations(self):
+        questions = ["Em tính hạn đăng ký như thế nào?", "Nếu phải sớm 30 phút thì em trừ hay cộng?", None]
+        packed_history = []
+        def upstream(request):
+            if request.url.host == 'workspace-service':
+                return httpx.Response(200)
+            payload = json.loads(request.content)
+            if request.url.host == 'retrieval-service':
+                return httpx.Response(200, json={'evidence': [SCHEDULE]})
+            content = json.loads(payload['messages'][1]['content'])
+            if 'question' in content:
+                return httpx.Response(200, json={'text': json.dumps({'query': content['question']})})
+            packed_history.append(content['history'])
+            question = questions[len(packed_history)-1]
+            return httpx.Response(200, json={'text': json.dumps({'question': question, 'claims': [claim('Buổi demo lúc 14:00.', SCHEDULE)]})})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            worker = Worker(self.database, client)
+            for action, query in [('guide', 'Tôi nên đăng ký lúc nào?'), ('hint', 'Tôi nghĩ cộng thêm 30 phút.'), ('solution', 'Cho tôi xem lời giải.')]:
+                run = self.new_run(query)
+                run['input'].update(task='socratic_tutor', tutor_action=action)
+                await worker.execute(run)
+                self.assertEqual(run['status'], 'succeeded', run.get('error'))
+                self.assertEqual(run['result']['claims'][0]['citations'], [SCHEDULE])
+        self.assertEqual(packed_history[0], [])
+        self.assertIn(questions[0], packed_history[1][0]['answer'])
+        self.assertIn('cộng thêm', packed_history[2][-1]['question'])
+        self.assertIsNone(run['result']['tutor_question'])
+
     async def test_generation_repair_validates_envelope_uuid_and_provenance(self):
         good = json.dumps({"claims": [claim("14:00 thứ Sáu.", SCHEDULE)]})
         invalid = [

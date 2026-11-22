@@ -4,12 +4,12 @@ import { expect, test } from '@playwright/test'
 type Job = { kind: string; status: string }
 type Evidence = { document_id: string; page: number; text: string }
 type Claim = { text: string; citations: { document_id: string }[] }
-type Run = { run_id: string; conversation_id: string; status: string; error_code?: string; result: { insufficient_evidence: boolean; claims: Claim[] } }
+type Run = { run_id: string; conversation_id: string; status: string; error_code?: string; result: { tutor_question?: string | null; insufficient_evidence: boolean; claims: Claim[] } }
 
 test('real Vietnamese PDF indexing, scoped search, grounded Ask follow-up and citation navigation', async ({ page, baseURL }) => {
   const indexTimeout = (Number(process.env.LOCAL_RAG_PARSE_SECONDS ?? 300) + 150) * 1000
   const runTimeout = (Number(process.env.LOCAL_RAG_RUN_SECONDS ?? 210) + 30) * 1000
-  test.setTimeout(indexTimeout + runTimeout * 2 + 60000)
+  test.setTimeout(indexTimeout + runTimeout * 6 + 60000)
   const origin = baseURL!
   await page.setContent(`<!doctype html><html lang="vi"><meta charset="utf-8"><style>
     body{font-family:"DejaVu Sans",sans-serif;font-size:18px;line-height:1.6;margin:48px}
@@ -95,6 +95,65 @@ test('real Vietnamese PDF indexing, scoped search, grounded Ask follow-up and ci
     await expect(page).toHaveURL(new RegExp('[?&]document=' + document + '(&|$)'))
     await expect(page).toHaveURL(new RegExp('[?&]page=' + number + '(&|$)'))
     await expect(page.getByRole('img', { name: 'PDF page ' + number, exact: true })).toBeVisible({ timeout: 15000 })
+    let tutorConversation: string | undefined
+    for (const [action, question] of [
+      ['guide', 'Hãy hướng dẫn tôi tự tính hạn đăng ký mượn bộ chuyển trước buổi demo.'],
+      ['hint', 'Tôi nghĩ demo lúc 14:00 thì đăng ký lúc 14:30, cho tôi một gợi ý.'],
+      ['solution', 'Cho tôi xem lời giải, cần đăng ký chậm nhất mấy giờ?'],
+    ] as const) {
+      const submitted = await page.request.post(path + '/runs', {
+        headers: { Origin: origin, 'Idempotency-Key': randomUUID() },
+        data: { mode: 'ASK', conversation_id: tutorConversation,
+          objective: { query: question, capability: 'LEARN', task: 'socratic_tutor', tutor_action: action, document_ids: [document] } },
+      })
+      expect(submitted.status()).toBe(202)
+      const id = (await submitted.json()).run_id
+      let tutor: Run | undefined
+      await expect.poll(async () => {
+        const response = await page.request.get(path + '/runs/' + id, { timeout: 20000 })
+        expect(response.status()).toBe(200)
+        tutor = await response.json() as Run
+        return ['succeeded', 'failed', 'cancelled'].includes(tutor.status)
+      }, { timeout: runTimeout, intervals: [1000] }).toBeTruthy()
+      expect(tutor?.status, JSON.stringify({ status: tutor?.status, error_code: tutor?.error_code })).toBe('succeeded')
+      if (!tutor) throw new Error('Tutor returned no terminal result')
+      if (tutorConversation) expect(tutor.conversation_id).toBe(tutorConversation)
+      tutorConversation = tutor.conversation_id
+      if (action === 'solution') {
+        expect(tutor.result.tutor_question).toBeNull()
+        expect(tutor.result.claims.map(claim => claim.text).join(' ')).toMatch(/13\s*(?::|h|giờ)\s*30/)
+        expect(tutor.result.claims.some(claim => claim.citations.some(cite => cite.document_id === document))).toBeTruthy()
+      } else {
+        expect(tutor.result.tutor_question?.length).toBeGreaterThan(1)
+      }
+    }
+    const planObjective = { query: 'Giải thích yêu cầu mượn bộ chuyển trước buổi demo.', capability: 'LEARN', task: 'explanation', document_ids: [document] }
+    const steps = ['retrieve', 'compose'].map(tool => ({ step_id: randomUUID(), tool, action: tool === 'retrieve' ? 'Đọc quy định mượn thiết bị' : 'Giải thích quy định với trích dẫn',
+      objective: planObjective, expected_output: 'Giải thích có căn cứ từ tài liệu' }))
+    const planned = await page.request.post(path + '/plans', { headers: { Origin: origin, 'Idempotency-Key': randomUUID() }, data: { ...planObjective, steps } })
+    expect(planned.status()).toBe(201)
+    const plan = await planned.json()
+    expect(plan.steps).toEqual(steps)
+    const accepted = await page.request.post(path + '/plans/' + plan.plan_id + '/accept', {
+      headers: { Origin: origin, 'Idempotency-Key': randomUUID() }, data: { plan_version: plan.plan_version },
+    })
+    expect(accepted.status()).toBe(200)
+    const executing = await page.request.post(path + '/runs', {
+      headers: { Origin: origin, 'Idempotency-Key': randomUUID() }, data: { mode: 'PLAN', plan_id: plan.plan_id, plan_version: plan.plan_version },
+    })
+    expect(executing.status()).toBe(202)
+    const planRun = (await executing.json()).run_id
+    let planResult: Run | undefined
+    await expect.poll(async () => {
+      const response = await page.request.get(path + '/runs/' + planRun, { timeout: 20000 })
+      expect(response.status()).toBe(200)
+      planResult = await response.json() as Run
+      return ['succeeded', 'failed', 'cancelled'].includes(planResult.status)
+    }, { timeout: runTimeout, intervals: [1000] }).toBeTruthy()
+    expect(planResult?.status, JSON.stringify({ status: planResult?.status, error_code: planResult?.error_code })).toBe('succeeded')
+    const progress = await page.request.get(path + '/runs/' + planRun + '/steps')
+    expect(progress.status()).toBe(200)
+    expect((await progress.json()).map((step: { status: string }) => step.status)).toEqual(['succeeded', 'succeeded'])
     console.log('LIVE_VERIFICATION', JSON.stringify({ workspace, document, index_status: 'succeeded',
       evidence_count: search.evidence.length, first_run: first.run_id, followup_run: followup.run_id, citation_page: number }))
   } finally {

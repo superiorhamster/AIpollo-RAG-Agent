@@ -1069,7 +1069,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Objective"
+                "$ref": "#/components/schemas/PlanDefinition"
               }
             }
           }
@@ -5935,6 +5935,108 @@
           }
         ]
       }
+    },
+    "/v1/workspaces/{workspace_id}/runs/{run_id}/steps": {
+      "get": {
+        "summary": "Get Run Steps",
+        "operationId": "get_run_steps_v1_workspaces__workspace_id__runs__run_id__steps_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunStepView"
+                  },
+                  "title": "Response Get Run Steps V1 Workspaces  Workspace Id  Runs  Run Id  Steps Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/workflow-features": {
+      "get": {
+        "summary": "Workflow Features",
+        "operationId": "workflow_features_v1_workspaces__workspace_id__workflow_features_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -5953,6 +6055,17 @@
     "schemas": {
       "Answer": {
         "properties": {
+          "tutor_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tutor Question"
+          },
           "kind": {
             "type": "string",
             "enum": [
@@ -5962,6 +6075,7 @@
               "quiz",
               "flashcards",
               "mind_map",
+              "socratic_tutor",
               "comparison",
               "screening",
               "extraction",
@@ -6171,6 +6285,7 @@
               "quiz",
               "flashcards",
               "mind_map",
+              "socratic_tutor",
               "comparison",
               "screening",
               "extraction",
@@ -6183,6 +6298,38 @@
             ],
             "title": "Task",
             "default": "answer"
+          },
+          "tutor_action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "guide",
+                  "hint",
+                  "solution"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tutor Action"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/WorkflowStep"
+                },
+                "type": "array",
+                "maxItems": 6,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
           },
           "expected_version": {
             "type": "integer",
@@ -6235,6 +6382,7 @@
               "quiz",
               "flashcards",
               "mind_map",
+              "socratic_tutor",
               "comparison",
               "screening",
               "extraction",
@@ -6247,6 +6395,22 @@
             ],
             "title": "Task",
             "default": "answer"
+          },
+          "tutor_action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "guide",
+                  "hint",
+                  "solution"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tutor Action"
           }
         },
         "type": "object",
@@ -6293,7 +6457,14 @@
           },
           "steps": {
             "items": {
-              "$ref": "#/components/schemas/Step"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Step"
+                },
+                {
+                  "$ref": "#/components/schemas/WorkflowStep"
+                }
+              ]
             },
             "type": "array",
             "title": "Steps"
@@ -7139,6 +7310,224 @@
           "disabled"
         ],
         "title": "AccountUpdate"
+      },
+      "PlanDefinition": {
+        "properties": {
+          "document_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Document Ids"
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 1800,
+            "minLength": 2,
+            "title": "Query"
+          },
+          "capability": {
+            "type": "string",
+            "enum": [
+              "LEARN",
+              "RESEARCH",
+              "WRITE"
+            ],
+            "title": "Capability",
+            "default": "LEARN"
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "answer",
+              "explanation",
+              "study_guide",
+              "quiz",
+              "flashcards",
+              "mind_map",
+              "socratic_tutor",
+              "comparison",
+              "screening",
+              "extraction",
+              "evidence_table",
+              "synthesis",
+              "draft",
+              "rewrite",
+              "summary",
+              "citation_review"
+            ],
+            "title": "Task",
+            "default": "answer"
+          },
+          "tutor_action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "guide",
+                  "hint",
+                  "solution"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tutor Action"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/WorkflowStep"
+                },
+                "type": "array",
+                "maxItems": 6,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_ids",
+          "query"
+        ],
+        "title": "PlanDefinition"
+      },
+      "WorkflowStep": {
+        "properties": {
+          "step_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Step Id"
+          },
+          "tool": {
+            "type": "string",
+            "enum": [
+              "retrieve",
+              "compose"
+            ],
+            "title": "Tool"
+          },
+          "action": {
+            "type": "string",
+            "maxLength": 600,
+            "minLength": 2,
+            "title": "Action"
+          },
+          "objective": {
+            "$ref": "#/components/schemas/Objective"
+          },
+          "expected_output": {
+            "type": "string",
+            "maxLength": 600,
+            "minLength": 2,
+            "title": "Expected Output"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "step_id",
+          "tool",
+          "action",
+          "objective",
+          "expected_output"
+        ],
+        "title": "WorkflowStep"
+      },
+      "StepResult": {
+        "properties": {
+          "cost": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Cost"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Answer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Citation"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cost"
+        ],
+        "title": "StepResult"
+      },
+      "RunStepView": {
+        "properties": {
+          "step_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Step Id"
+          },
+          "position": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Position"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "succeeded"
+            ],
+            "title": "Status"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StepResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "step_id",
+          "position",
+          "status",
+          "result",
+          "updated_at"
+        ],
+        "title": "RunStepView"
       }
     }
   }

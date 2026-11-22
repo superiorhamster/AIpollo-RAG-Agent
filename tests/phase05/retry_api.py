@@ -231,6 +231,40 @@ class RetryApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["result"]["claims"][0]["citations"], [citation])
         self.assertIsNone(run["history_snapshot"])
 
+    async def test_tutor_question_and_chat_claims_stay_out_of_shared_artifact(self):
+        original = await self.seed(status='succeeded', error=None, result={
+            'tutor_question': 'private-tutor-context',
+            'claims': [{'text': 'private-chat-fact', 'source': 'conversation', 'citations': []}],
+        })
+        def workspace(request):
+            return httpx.Response(200, json={'role': 'OWNER'})
+        with patch.dict(os.environ, {'ORCHESTRATION_ARTIFACT_TOKEN': 'fixture', 'WORKSPACE_INTERACTION_TOKEN': 'fixture'}):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(workspace)) as client:
+                app.state.client = client
+                response = await self.client.get(
+                    f'/internal/v1/workspaces/{self.workspace}/users/{self.user}/artifact-runs/{original}',
+                    headers={'X-Artifact-Service-Token': 'fixture'},
+                )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()['result']
+        self.assertNotIn('tutor_question', body)
+        self.assertEqual(body['claims'], [])
+        self.assertTrue(body['insufficient_evidence'])
+
+    async def test_tutor_requires_ask_mode_and_explicit_feature_flag(self):
+        objective = {**self.objective, "capability": "LEARN", "task": "socratic_tutor"}
+        with patch.dict(os.environ, {"AGENTIC_TUTOR_ENABLED": "false"}):
+            response = await self.client.post(self.route, headers={"Idempotency-Key": str(uuid4())},
+                                             json={"mode": "ASK", "objective": objective})
+            self.assertEqual(response.status_code, 409)
+        with patch.dict(os.environ, {"AGENTIC_TUTOR_ENABLED": "true"}):
+            response = await self.client.post(self.route, headers={"Idempotency-Key": str(uuid4())},
+                                             json={"mode": "AGENT", "objective": objective})
+            self.assertEqual(response.status_code, 422)
+            response = await self.client.post(self.route, headers={"Idempotency-Key": str(uuid4())},
+                                             json={"mode": "ASK", "objective": objective})
+            self.assertEqual(response.status_code, 202, response.text)
+
     async def test_invalid_generation_retry_preserves_scope_and_snapshot(self):
         original = await self.seed(error="invalid_model_output", snapshot=[])
         response = await self.client.get(self.route + '/' + str(original))
