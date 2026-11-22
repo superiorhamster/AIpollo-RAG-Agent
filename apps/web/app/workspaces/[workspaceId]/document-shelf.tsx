@@ -487,7 +487,7 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
               {error && view !== 'library' && <p role="alert"><DesignIcon name="error" /> {error}</p>}
               {selectedDoc.preview_ready ? <AnnotatedPreview key={'preview-' + selectedDoc.document_id}
                 documentUrl={base + '/' + selectedDoc.document_id} page={page}
-                citation={citation} onClearCitation={() => setCitation(current => current ? { ...current, region: undefined } : undefined)}
+                citation={citation} onClearCitation={() => setCitation(current => current ? { ...current, region: undefined, regions: undefined } : undefined)}
                 onPage={next => select(selectedDoc.document_id, next, false)} /> : (
                 <p role="status" className="reader-empty">{selectedPreviewJob === 'failed' ? 'Preview could not be generated.'
                   : selectedPreviewJob === 'cancelled' ? 'Preview was cancelled.'

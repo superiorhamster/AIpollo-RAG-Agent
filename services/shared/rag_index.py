@@ -1,7 +1,7 @@
 """Internal transport models for document indexing."""
 
-from typing import Annotated
-from uuid import UUID
+from typing import Annotated, Literal
+from uuid import UUID, uuid5
 
 from pydantic import BaseModel, Field, FiniteFloat, StringConstraints
 
@@ -14,11 +14,37 @@ Text = Annotated[str, StringConstraints(min_length=1, max_length=1800)]
 Vector = Annotated[list[FiniteFloat], Field(min_length=1, max_length=MAX_DIMENSIONS)]
 
 
+Region = tuple[FiniteFloat, FiniteFloat, FiniteFloat, FiniteFloat]
+
+
+class Segment(BaseModel):
+    id: UUID | None = None
+    ordinal: int = Field(default=0, ge=0, lt=32)
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+    page: int = Field(ge=1, le=300)
+    partial: bool = False
+    precision: Literal["line", "coarse", "page"] = "page"
+    rects: list[Region] = Field(default_factory=list, max_length=8)
+
+
+def point_id(generation: UUID, ordinal: int) -> UUID:
+    return uuid5(generation, str(ordinal))
+
+
+def segment_id(parent: UUID, ordinal: int) -> UUID:
+    return uuid5(parent, f"sentence:v1:{ordinal}")
+
+
 class Chunk(BaseModel):
     page: int = Field(ge=1, le=300)
     section: str = Field(default="", max_length=300)
     text: Text
-    region: tuple[FiniteFloat, FiniteFloat, FiniteFloat, FiniteFloat] | None = None
+    region: Region | None = None
+
+
+class IndexedChunk(Chunk):
+    citation_segments_v1: list[Segment] | None = Field(default=None, max_length=32)
 
 
 class EmbeddingConfig(BaseModel):
@@ -39,7 +65,7 @@ class IndexBatch(BaseModel):
     config: EmbeddingConfig
     generation: UUID
     offset: int = Field(ge=0, lt=MAX_CHUNKS)
-    chunks: list[Chunk] = Field(min_length=1, max_length=EMBED_BATCH)
+    chunks: list[IndexedChunk] = Field(min_length=1, max_length=EMBED_BATCH)
     vectors: list[Vector] = Field(min_length=1, max_length=EMBED_BATCH)
 
 

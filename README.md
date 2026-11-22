@@ -212,3 +212,18 @@ Vietnamese PDF, verifies indexing/search, asks a follow-up question,
 and opens the cited PDF page. Its own test data is removed afterwards. Run one
 full verification stack at a time on resource-limited hosts; retained main-project
 volumes and queued jobs are not part of the test.
+
+
+### Ask citation mode
+
+In the Ask composer, **Citation Mode** defaults to **Segment**. It uses adaptive
+sentence citations for the standard answer output where indexed sentence
+maps are available. Choose **Chunk** to use the legacy evidence prompt and PDF
+region. The selection is saved in the browser and applies to new Ask turns.
+Saved answers and artifacts keep their original citations. Retry reuses the
+failed turn's mode. Switching modes does not reindex any documents.
+
+See the [sentence citation guide](docs/ask-pipeline/sentence-citations.md) for the
+data flow, API and prompts, parser setup, verification commands and troubleshooting.
+The [implementation record](harness/build/change-20261122-sentence-citation-mvp.md)
+records observed model and browser results.

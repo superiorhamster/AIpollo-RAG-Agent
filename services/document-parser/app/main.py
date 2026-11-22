@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from pydantic import TypeAdapter
 
 from rag_http import ApiError, health_response, install_http
-from rag_index import MAX_PDF_BYTES, Chunk
+from rag_index import MAX_PDF_BYTES, IndexedChunk
 from rag_runtime import RuntimeBudgets
 
 SERVICE = "document-parser"
@@ -21,7 +21,7 @@ ARTIFACTS = Path(os.environ.get("DOCLING_ARTIFACTS_PATH", "/opt/docling"))
 budgets = RuntimeBudgets.from_env()
 slot = asyncio.Lock()
 children: set[asyncio.subprocess.Process] = set()
-chunk_list = TypeAdapter(list[Chunk])
+chunk_list = TypeAdapter(list[IndexedChunk])
 
 
 async def stop(process: asyncio.subprocess.Process) -> None:
@@ -64,7 +64,7 @@ async def readiness():
     )))
 
 
-async def converted(request: Request, source: Path, result: Path) -> list[Chunk]:
+async def converted(request: Request, source: Path, result: Path) -> list[IndexedChunk]:
     process = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "app.conversion", str(source), str(result),
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
@@ -97,7 +97,7 @@ async def converted(request: Request, source: Path, result: Path) -> list[Chunk]
 
 
 @app.post("/internal/v1/parse")
-async def parse(request: Request) -> list[Chunk]:
+async def parse(request: Request) -> list[IndexedChunk]:
     if request.headers.get("content-type") != "application/pdf":
         raise ApiError(415, "unsupported_media_type", "Send a PDF.")
     if slot.locked():

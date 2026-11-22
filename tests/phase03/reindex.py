@@ -11,7 +11,8 @@ from sqlalchemy import text
 from app.indexing import FailedSource, IndexJob, IndexWorker, ParserBusy
 from app.reindex import reindex
 from rag_db import open_database
-from rag_index import Chunk, EmbeddingConfig, IndexBatch
+from rag_index import EmbeddingConfig, IndexBatch
+from rag_index import IndexedChunk as Chunk
 
 OLD, NEW = "a" * 64, "b" * 64
 
@@ -42,6 +43,33 @@ class Reindex(unittest.IsolatedAsyncioTestCase):
         async with self.database.connect() as connection:
             rows = await connection.execute(text("SELECT * FROM ingestion.jobs WHERE job_id=:id"), {"id": job})
             return dict(rows.mappings().one())
+
+    async def test_generation_preserves_legacy_and_stores_stable_segment_ids(self):
+        import hashlib
+        import json
+        from uuid import uuid5
+
+        from app.indexing import INDEX_REVISION, citation_generation
+        from rag_index import Segment, point_id, segment_id
+
+        document = uuid4()
+        fingerprint = "a" * 64
+        chunk = Chunk(text="First. Second.", page=1)
+        serialized = json.dumps([chunk.model_dump(mode="json", exclude={"citation_segments_v1"})], ensure_ascii=False)
+        version = hashlib.sha256(serialized.encode()).hexdigest()
+        expected = uuid5(document, f"{INDEX_REVISION}:{fingerprint}:{version}")
+        self.assertEqual(citation_generation(document, fingerprint, [chunk])[0], expected)
+
+        draft = chunk.model_copy(update={"citation_segments_v1": [
+            Segment(start=0, end=6, page=1),
+            Segment(start=7, end=14, page=1, ordinal=1),
+        ]})
+        generation, resolved = citation_generation(document, fingerprint, [draft])
+        self.assertNotEqual(generation, expected)
+        self.assertEqual(citation_generation(document, fingerprint, resolved)[0], generation)
+        self.assertEqual([entry.id for entry in resolved[0].citation_segments_v1],
+                         [segment_id(point_id(generation, 0), n) for n in range(2)])
+        self.assertEqual(resolved[0].text, chunk.text)
 
     async def test_dry_run_selection_apply_and_idempotency(self):
         old = await self.seed()

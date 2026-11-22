@@ -10,14 +10,14 @@ from uuid import uuid4
 import httpx
 
 from app.generation import REPAIR
-from app.ask_prompts import ANSWER_SYSTEM, REWRITE_SYSTEM
+from app.ask_prompts import ANSWER_SYSTEM, ATTRIBUTION_SYSTEM, PRIMARY_SEGMENT_SYSTEM, REWRITE_SYSTEM
 from app.types import Answer, GeneratedAnswer, GeneratedAskAnswer
 from app.worker import ASK_COMPLETION_UNAVAILABLE, StopRun, Worker
 
 
 def passage(name, text):
     return dict(name=name, text=text, document_id=str(uuid4()), chunk_id=str(uuid4()),
-                section="", page=1, region=None)
+                section="", page=1, region=None, segment_ids=None)
 
 
 SCHEDULE = passage("Schedule", "Internal demo Friday at 09:30 in B2-302. Instructor demo Friday at 14:00 in B4-201.")
@@ -88,7 +88,8 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
         self.thread, self.workspace, self.user = uuid4(), uuid4(), uuid4()
         env = patch.dict(os.environ, {"MODEL_CHAT_TOKEN": "fixture", "RETRIEVAL_INTERACTION_TOKEN": "fixture",
                                       "WORKSPACE_INTERACTION_TOKEN": "fixture", "RUN_MAX_COST_MICRO_USD": "0",
-                                      "RUN_MAX_INPUT_BYTES": "14000", "RUN_MAX_STEPS": "2"})
+                                      "RUN_MAX_INPUT_BYTES": "14000", "RUN_MAX_STEPS": "2",
+                                      "ASK_SENTENCE_CITATIONS": "legacy"})
         env.start()
         self.addCleanup(env.stop)
 
@@ -296,6 +297,165 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(worker.complete.await_count, 2)
                 self.assertEqual(run['status'], 'succeeded', run.get('error'))
                 self.assertEqual(run['result']['claims'][0]['citations'], [SCHEDULE])
+
+    async def test_request_citation_mode_controls_prompt_and_retrieval_opt_in(self):
+        identifier = str(uuid4())
+        parent = SCHEDULE | {"citation_segments_v1": [
+            dict(id=identifier, ordinal=0, start=0, end=len(SCHEDULE["text"]),
+                 page=1, precision="line", rects=[(.1, .1, .7, .2)]),
+        ]}
+        for mode in ("segment", "chunk", None):
+            with self.subTest(mode=mode):
+                run = self.new_run(Q1, new_thread=True)
+                if mode is not None:
+                    run["input"]["citation_mode"] = mode
+                systems = []
+
+                def handle(request):
+                    if request.url.host == "workspace-service":
+                        return httpx.Response(200)
+                    payload = json.loads(request.content)
+                    if request.url.host == "retrieval-service":
+                        self.assertEqual(payload.get("include_segments"), True if mode == "segment" else None)
+                        return httpx.Response(200, json={"evidence": [parent]})
+                    system, user = payload["messages"]
+                    systems.append(system["content"])
+                    part = json.loads(user["content"])["evidence"][0]
+                    if mode == "segment":
+                        self.assertEqual(part["segments"][0]["id"], identifier)
+                        evidence_id = identifier
+                    else:
+                        self.assertEqual(part, {"id": SCHEDULE["chunk_id"], "text": SCHEDULE["text"], "section": ""})
+                        self.assertNotIn(identifier, user["content"])
+                        evidence_id = SCHEDULE["chunk_id"]
+                    return httpx.Response(200, json={"text": json.dumps({"claims": [
+                        {"text": "Answer.", "source": "document", "evidence": [evidence_id]},
+                    ]})})
+
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+                    worker = Worker(self.database, client)
+                    # Explicit Chunk must suppress even a configured two-pass pipeline.
+                    worker.citation_mode = "two" if mode == "chunk" else "legacy"
+                    await worker.execute(run)
+                self.assertEqual(run["status"], "succeeded", run.get("error"))
+                self.assertEqual(systems, [PRIMARY_SEGMENT_SYSTEM if mode == "segment" else ANSWER_SYSTEM])
+                citation = run["result"]["claims"][0]["citations"][0]
+                self.assertEqual(citation["segment_ids"], [identifier] if mode == "segment" else None)
+
+    async def test_adaptive_citations_and_per_target_fallback(self):
+        from asyncio import get_running_loop
+
+        parents = [SCHEDULE | {}, CHECKLIST | {}]
+        for parent in parents:
+            parent["citation_segments_v1"] = [
+                dict(id=str(uuid4()), ordinal=0, start=0, end=len(parent["text"]),
+                     page=1, precision="line", rects=[(.1, .1, .7, .2), (.1, .25, .4, .3)]),
+            ]
+        first_id, second_id = [p["citation_segments_v1"][0]["id"] for p in parents]
+        for mode in ("single", "two", "auto"):
+            with self.subTest(mode=mode):
+                worker = Worker(self.database, None)
+                worker.citation_mode = mode
+                worker.current = AsyncMock()
+                phase = []
+
+                async def complete(_run, system, body, _tokens, **_kwargs):
+                    payload = json.loads(body)
+                    phase.append(system)
+                    if system == ATTRIBUTION_SYSTEM:
+                        self.assertEqual({t["claim"] for t in payload["targets"]}, {"Answer verbatim."})
+                        self.assertEqual(set(payload["parents"]), {p["chunk_id"] for p in parents})
+                        return json.dumps({"attributions": [
+                            {"target": "c0:p0", "segment_ids": [first_id]},
+                            {"target": "c0:p1", "segment_ids": [first_id]},
+                        ]})
+                    if system == PRIMARY_SEGMENT_SYSTEM:
+                        self.assertEqual(payload["evidence"][0]["segments"][0]["id"], first_id)
+                        ids = [first_id, second_id]
+                    else:
+                        ids = [p["chunk_id"] for p in parents]
+                    return json.dumps({"claims": [
+                        {"text": "Answer verbatim.", "source": "document", "evidence": ids},
+                    ]})
+
+                worker.complete = complete
+                answer = await worker.compose(self.new_run(Q1), parents, [], 0,
+                                              deadline=get_running_loop().time() + 100)
+                decoded = Answer.model_validate(answer).model_dump(mode="json")
+                claim = decoded["claims"][0]
+                self.assertEqual(claim["text"], "Answer verbatim.")
+                self.assertEqual(claim["citations"][0]["segment_ids"], [first_id])
+                self.assertEqual(len(claim["citations"][0]["regions"]), 2)
+                self.assertEqual(claim["citations"][1]["chunk_id"], parents[1]["chunk_id"])
+                if mode == "two":
+                    self.assertEqual(phase, [ANSWER_SYSTEM, ATTRIBUTION_SYSTEM])
+                    self.assertIsNone(claim["citations"][1]["segment_ids"])
+                else:
+                    self.assertEqual(phase, [PRIMARY_SEGMENT_SYSTEM])
+                    self.assertEqual(claim["citations"][1]["segment_ids"], [second_id])
+
+    async def test_auto_chooses_legacy_answer_for_many_segments(self):
+        from asyncio import get_running_loop
+
+        parents = []
+        for _ in range(2):
+            parent = passage("Long source", "A." * 17)
+            parent["citation_segments_v1"] = [
+                dict(id=str(uuid4()), ordinal=n, start=n * 2, end=n * 2 + 2,
+                     page=1, precision="page", rects=[])
+                for n in range(17)
+            ]
+            parents.append(parent)
+        worker = Worker(self.database, None)
+        worker.citation_mode = "auto"
+        worker.current = AsyncMock()
+        worker.complete = AsyncMock(side_effect=[
+            json.dumps({"claims": [claim("A.", parents[0])]}),
+            "not JSON",
+        ])
+        result = await worker.compose(self.new_run(Q1), parents, [], 0,
+                                      deadline=get_running_loop().time() + 100)
+        self.assertEqual([call.args[1] for call in worker.complete.await_args_list],
+                         [ANSWER_SYSTEM, ATTRIBUTION_SYSTEM])
+        self.assertIsNone(result["claims"][0]["citations"][0]["segment_ids"])
+
+    async def test_merge_preserves_uncited_gaps_and_precision(self):
+        from app.citations import anchors
+
+        text = "A. B. C. D. E."
+        segments = [dict(id=str(uuid4()), ordinal=n, start=n * 3, end=n * 3 + 2,
+                         page=1, precision="page" if n == 4 else "line",
+                         rects=[] if n == 4 else [(n / 10, .1, n / 10 + .09, .15)])
+                    for n in range(5)]
+        parent = SCHEDULE | {"text": text, "citation_segments_v1": segments}
+        result = anchors(parent, {segments[n]["id"] for n in (0, 1, 3, 4)})
+        self.assertEqual([citation["text"] for citation in result], ["A. B.", "D.", "E."])
+        self.assertEqual(len(result[0]["regions"]), 1)
+        self.assertEqual(result[2]["regions"], [])
+        self.assertEqual(result[2]["segment_ids"], [segments[4]["id"]])
+
+    async def test_optional_attribution_respects_deadline_and_cancellation(self):
+        from asyncio import get_running_loop
+
+        parent = SCHEDULE | {"citation_segments_v1": [
+            dict(id=str(uuid4()), ordinal=0, start=0, end=len(SCHEDULE["text"]),
+                 page=1, precision="page", rects=[]),
+        ]}
+        baseline = [{"text": "Answer.", "citations": [SCHEDULE]}]
+        worker = Worker(self.database, None)
+        worker.current = AsyncMock()
+        worker.complete = AsyncMock()
+        run = self.new_run(Q1)
+        parents = {parent["chunk_id"]: parent}
+        actual = await worker.attribute(run, baseline, parents, 0, get_running_loop().time() + 1)
+        self.assertEqual(actual, baseline)
+        worker.complete.assert_not_awaited()
+
+        worker.current.side_effect = StopRun("cancelled")
+        with self.assertRaises(StopRun) as refusal:
+            await worker.attribute(run, baseline, parents, 0, get_running_loop().time() + 40)
+        self.assertEqual(refusal.exception.code, "cancelled")
+        worker.complete.assert_not_awaited()
 
     async def test_repair_does_not_exceed_the_cost_budget(self):
         def upstream(request):
