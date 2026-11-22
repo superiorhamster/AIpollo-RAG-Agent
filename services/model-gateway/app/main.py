@@ -255,6 +255,11 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
     headers = {"Authorization": "Bearer " + key, "X-Request-ID": request_id(request)}
     body = {"model": model, "max_tokens": data.max_tokens, "stream": False,
             "messages": [item.model_dump() for item in data.messages]}
+    effort = os.environ.get("MODEL_CHAT_REASONING_EFFORT", "")
+    if effort:
+        if effort not in {"none", "minimal", "low", "medium", "high", "xhigh", "max"}:
+            raise ApiError(503, "chat_model_unavailable", "The configured reasoning effort is invalid.")
+        body["reasoning_effort"] = effort
     try:
         # The Ask worker waits up to 30 seconds. Bound both attempts together.
         async with asyncio.timeout(28 if data.retry_on_unavailable else None):

@@ -6055,6 +6055,32 @@
     "schemas": {
       "Answer": {
         "properties": {
+          "evidence_matrix": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/EvidenceCell"
+                },
+                "type": "array",
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Matrix"
+          },
+          "budget_exhausted": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Exhausted"
+          },
           "tutor_question": {
             "anyOf": [
               {
@@ -6110,24 +6136,6 @@
       },
       "Citation": {
         "properties": {
-          "citation_id": {
-            "type": ["string", "null"],
-            "format": "uuid"
-          },
-          "segment_ids": {
-            "type": ["array", "null"],
-            "items": {"type": "string", "format": "uuid"},
-            "minItems": 1,
-            "maxItems": 6
-          },
-          "regions": {
-            "type": ["array", "null"],
-            "items": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
-            "maxItems": 16
-          },
-          "precision": {
-            "enum": ["line", "coarse", "page", null]
-          },
           "page": {
             "type": "integer",
             "maximum": 300.0,
@@ -6172,6 +6180,82 @@
               }
             ],
             "title": "Region"
+          },
+          "citation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation Id"
+          },
+          "segment_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array",
+                "maxItems": 6,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment Ids"
+          },
+          "regions": {
+            "anyOf": [
+              {
+                "items": {
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array",
+                  "maxItems": 4,
+                  "minItems": 4
+                },
+                "type": "array",
+                "maxItems": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Regions"
+          },
+          "precision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "line",
+                  "coarse",
+                  "page"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision"
           },
           "document_id": {
             "type": "string",
@@ -6349,6 +6433,19 @@
             ],
             "title": "Steps"
           },
+          "curriculum_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 6.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Curriculum Days"
+          },
           "expected_version": {
             "type": "integer",
             "minimum": 1.0,
@@ -6469,9 +6566,44 @@
             "enum": [
               "REVIEW",
               "ACCEPTED",
-              "CANCELLED"
+              "CANCELLED",
+              "GENERATING",
+              "FAILED"
             ],
             "title": "State"
+          },
+          "generation_status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "queued",
+              "running",
+              "failed"
+            ],
+            "title": "Generation Status",
+            "default": "ready"
+          },
+          "generation_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Error"
+          },
+          "curriculum_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Curriculum Days"
           },
           "steps": {
             "items": {
@@ -6672,7 +6804,11 @@
       "StartRun": {
         "properties": {
           "citation_mode": {
-            "enum": ["segment", "chunk", null],
+            "enum": [
+              "segment",
+              "chunk",
+              null
+            ],
             "description": "Optional for Ask. Segment uses adaptive sentence citations and chunk uses legacy citations. Omission preserves the server default. Retry preserves the original mode."
           },
           "mode": {
@@ -7415,6 +7551,19 @@
               }
             ],
             "title": "Steps"
+          },
+          "curriculum_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 6.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Curriculum Days"
           }
         },
         "type": "object",
@@ -7453,6 +7602,27 @@
             "maxLength": 600,
             "minLength": 2,
             "title": "Expected Output"
+          },
+          "day": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 6.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array",
+            "maxItems": 6,
+            "title": "Citations"
           }
         },
         "additionalProperties": false,
@@ -7550,6 +7720,52 @@
           "updated_at"
         ],
         "title": "RunStepView"
+      },
+      "EvidenceCell": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Document Id"
+          },
+          "criterion": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 2,
+            "title": "Criterion"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "supported",
+              "contradicted",
+              "insufficient"
+            ],
+            "title": "Status"
+          },
+          "finding": {
+            "type": "string",
+            "maxLength": 800,
+            "title": "Finding"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Citations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "criterion",
+          "status",
+          "finding",
+          "citations"
+        ],
+        "title": "EvidenceCell"
       }
     }
   }

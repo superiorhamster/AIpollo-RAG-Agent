@@ -11,7 +11,7 @@ type Run = { run_id: string; conversation_id: string; status: string; error_code
 test('real Vietnamese PDF indexing, scoped search, grounded Ask follow-up and citation navigation', async ({ page, baseURL }) => {
   const indexTimeout = (Number(process.env.LOCAL_RAG_PARSE_SECONDS ?? 300) + 150) * 1000
   const runTimeout = (Number(process.env.LOCAL_RAG_RUN_SECONDS ?? 210) + 30) * 1000
-  test.setTimeout(indexTimeout + runTimeout * 6 + 60000)
+  test.setTimeout(indexTimeout + runTimeout * 8 + 60000)
   const origin = baseURL!
   const switchMode = process.env.EXPECT_CITATION_MODE_SWITCH === '1'
   const narrow = process.env.EXPECT_MULTILINE_CITATION === '1'
@@ -220,6 +220,28 @@ test('real Vietnamese PDF indexing, scoped search, grounded Ask follow-up and ci
     const progress = await page.request.get(path + '/runs/' + planRun + '/steps')
     expect(progress.status()).toBe(200)
     expect((await progress.json()).map((step: { status: string }) => step.status)).toEqual(['succeeded', 'succeeded'])
+    const curriculum = await page.request.post(path + '/plans', {
+      headers: { Origin: origin, 'Idempotency-Key': randomUUID() },
+      data: { query: 'Trong 3 ngày hãy học quy định tổ chức buổi demo và mượn thiết bị trong tài liệu.',
+        capability: 'LEARN', task: 'study_guide', document_ids: [document], curriculum_days: 3 },
+    })
+    expect(curriculum.status()).toBe(201)
+    const draft = await curriculum.json()
+    const draftPath = path + '/plans/' + draft.plan_id
+    expect(draft.state).toBe('GENERATING')
+    expect((await page.request.post(draftPath + '/accept', {
+      headers: { Origin: origin, 'Idempotency-Key': randomUUID() }, data: { plan_version: 1 },
+    })).status()).toBe(409)
+    let schedule: { state: string; generation_error?: string; steps: { day: number; citations: { document_id: string; page: number }[] }[] } | undefined
+    await expect.poll(async () => {
+      const response = await page.request.get(draftPath)
+      expect(response.status()).toBe(200)
+      schedule = await response.json()
+      return schedule?.state !== 'GENERATING'
+    }, { timeout: runTimeout, intervals: [1000] }).toBeTruthy()
+    expect(schedule?.state, JSON.stringify({ error: schedule?.generation_error })).toBe('REVIEW')
+    expect([...new Set(schedule!.steps.map(step => step.day))]).toEqual([1, 2, 3])
+    expect(schedule!.steps.every(step => step.citations.length && step.citations.every(c => c.document_id === document && c.page >= 1))).toBeTruthy()
     console.log('LIVE_VERIFICATION', JSON.stringify({ workspace, document, index_status: 'succeeded',
       evidence_count: search.evidence.length, highlight_count: expectedHighlightCount, first_run: first.run_id, followup_run: followup.run_id, citation_page: number }))
   } finally {

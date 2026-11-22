@@ -90,3 +90,10 @@ When Codex adds a dependency:
 4. Run the owning service's tests and vulnerability/license checks configured by the repo.
 5. Avoid unmaintained packages for security/auth/parsing boundaries.
 6. For major infrastructure dependencies, update `docs/architecture.md` or `docs/service-boundaries.md` if ownership or operations change.
+
+The opt-in multi-paper workflow uses `langgraph==1.2.24` in Agent Orchestrator
+only. Its explicit branches coordinate per-paper retrieval and evidence checks;
+existing Pydantic/HTTPX calls continue to own model/API validation. Graph state,
+leases and approval remain in the Orchestrator's PostgreSQL schema, using JSON
+snapshots rather than a second checkpoint authority. No LangSmith credentials
+or tracing endpoint are configured. See the [workflow API](https://docs.langchain.com/oss/python/langgraph/workflows-agents).

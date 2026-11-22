@@ -206,3 +206,89 @@ test('Socratic tutor keeps source scope for hints and solutions', async ({ page 
   await assistant.getByRole('button', { name: 'Show solution', exact: true }).last().click()
   await expect.poll(() => turns).toBe(3)
 })
+
+test('curriculum survives reload and only a completed cited version can be accepted', async ({ page }) => {
+  const document = '44444444-4444-4444-8444-444444444444'
+  const planId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const objective = { query: 'Ôn Attention trong 3 ngày', document_ids: [document], capability: 'LEARN', task: 'study_guide' }
+  let ready = false
+  let accepted = false
+  const citation = { document_id: document, chunk_id: '77777777-7777-4777-8777-777777777777',
+    name: 'ready.pdf', page: 2, text: 'Attention', section: '', region: [.1, .1, .8, .2] }
+  await page.route(/\/plans(?:\/[^/?]+)?(?:\/accept)?$/, route => {
+    const request = route.request()
+    if (request.url().endsWith('/accept')) {
+      expect(ready).toBe(true)
+      expect(request.postDataJSON().plan_version).toBe(1)
+      accepted = true
+    } else if (request.method() === 'POST') {
+      expect(request.postDataJSON().curriculum_days).toBe(3)
+      expect(request.postDataJSON().task).toBe('study_guide')
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      plan_id: planId, plan_version: 1, objective, curriculum_days: 3,
+      state: accepted ? 'ACCEPTED' : ready ? 'REVIEW' : 'GENERATING', generation_status: ready ? 'ready' : 'queued',
+      accepted_at: accepted ? new Date().toISOString() : null, generation_error: null,
+      steps: ready ? [1, 2, 3].map(day => ({ step_id: `bbbbbbbb-bbbb-4bbb-8bbb-${String(day).padStart(12, '0')}`,
+        day, tool: 'compose', action: 'Attention activity ' + day, objective,
+        expected_output: day === 3 ? 'Practice quiz' : 'Q/K/V explanation', citations: [citation] })) : [],
+      expected_outputs: ready ? ['Q/K/V explanation', 'Practice quiz'] : [],
+    }) })
+  })
+  const workspacePage = new WorkspacePage(page)
+  await workspacePage.open()
+  await page.getByRole('checkbox', { name: 'ready.pdf', exact: true }).check()
+  const assistant = page.getByRole('region', { name: 'Workspace assistant' })
+  await assistant.getByRole('button', { name: 'Plan', exact: true }).click()
+  await assistant.getByLabel('Study days').selectOption('3')
+  await assistant.getByLabel('Question or objective').fill(objective.query)
+  await assistant.getByRole('button', { name: 'Create plan', exact: true }).click()
+  await expect(assistant.getByText('Preparing schedule', { exact: true })).toBeVisible()
+  await expect(assistant.getByRole('button', { name: 'Accept plan', exact: true })).toHaveCount(0)
+  await page.reload()
+  await expect(assistant.getByText('Preparing schedule', { exact: true })).toBeVisible()
+  ready = true
+  await expect(assistant.getByText('Day 3:', { exact: true })).toBeVisible({ timeout: 10000 })
+  await assistant.getByRole('button', { name: 'ready.pdf, page 2' }).first().click()
+  await expect(page.getByRole('img', { name: 'PDF page 2', exact: true })).toBeVisible()
+  await expect(page.getByLabel('Citation highlight')).toBeVisible()
+  await assistant.getByRole('button', { name: 'Accept plan', exact: true }).click()
+  await expect(assistant.getByRole('button', { name: 'Run accepted plan', exact: true })).toBeVisible()
+})
+
+test('deep research requires multiple papers and opens matrix evidence', async ({ page }) => {
+  const a = '44444444-4444-4444-8444-444444444444'
+  const b = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  await page.request.post((process.env.UI_TEST_GATEWAY_URL ?? 'http://127.0.0.1:24001') + '/__fixture/research', { data: { enabled: true } })
+  const citation = { document_id: b, chunk_id: '77777777-7777-4777-8777-777777777777',
+    name: 'Paper B.pdf', page: 2, text: 'Only B describes Dataset V2.', section: '', region: [.1,.1,.8,.2] }
+  const completed = { run_id: '66666666-6666-4666-8666-666666666666', interaction: 'AGENT', status: 'succeeded',
+    plan_id: null, plan_version: null, conversation_id: null, step: 'compose', error_code: null,
+    query: 'Compare methods and datasets.', result: { kind: 'comparison', claims: [], insufficient_evidence: true,
+      budget_exhausted: 'generation_budget', evidence_matrix: [
+        { document_id: a, criterion: 'Dataset', status: 'insufficient', finding: '', citations: [] },
+        { document_id: b, criterion: 'Dataset', status: 'supported', finding: 'Dataset V2', citations: [citation] },
+      ] } }
+  await page.route(/\/runs$/, route => route.fulfill({ status: 202, json: completed }))
+  await page.route(/\/runs\/[^/]+\/events$/, route => route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'data: ' + JSON.stringify(completed) + '\n\n' }))
+  await new WorkspacePage(page).open()
+  const assistant = page.getByRole('region', { name: 'Workspace assistant' })
+  await page.getByRole('checkbox', { name: 'ready.pdf', exact: true }).check()
+  await assistant.getByRole('button', { name: 'Agent', exact: true }).click()
+  await assistant.getByLabel('Capability').selectOption('RESEARCH')
+  await assistant.getByLabel('Output').selectOption('comparison')
+  await assistant.getByLabel('Question or objective').fill(completed.query)
+  await assistant.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(assistant.getByText('Choose 2–5 papers for in-depth comparison.', { exact: true })).toBeVisible()
+  await page.getByRole('checkbox', { name: 'Paper B.pdf', exact: true }).check()
+  await assistant.getByRole('button', { name: 'Send', exact: true }).click()
+  const matrix = assistant.getByRole('region', { name: 'Evidence matrix' })
+  await expect(matrix.getByRole('cell', { name: 'Dataset V2', exact: true })).toBeVisible()
+  await expect(matrix.getByRole('cell', { name: 'Not enough evidence', exact: true })).toBeVisible()
+  await matrix.getByRole('button', { name: 'Paper B.pdf, page 2', exact: true }).click()
+  await expect(page.getByRole('img', { name: 'PDF page 2', exact: true })).toBeVisible({ timeout: 15000 })
+})
+
+test.afterEach(async ({ request }) => {
+  await request.post((process.env.UI_TEST_GATEWAY_URL ?? 'http://127.0.0.1:24001') + '/__fixture/research', { data: { enabled: false } })
+})

@@ -11,7 +11,7 @@ from app.main import app
 
 
 class CompletionRetry(unittest.IsolatedAsyncioTestCase):
-    async def request(self, statuses, *, retry):
+    async def request(self, statuses, *, retry, effort=""):
         calls = []
 
         def upstream(request):
@@ -25,7 +25,7 @@ class CompletionRetry(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {
             "MODEL_PROVIDER": "openai-compatible", "MODEL_CHAT_BASE_URL": "https://example.test/v1",
             "MODEL_CHAT_NAME": "fixture", "MODEL_CHAT_API_KEY": "provider-fixture",
-            "MODEL_CHAT_TOKEN": "service-fixture",
+            "MODEL_CHAT_TOKEN": "service-fixture", "MODEL_CHAT_REASONING_EFFORT": effort,
         }):
             async with (
                 httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as provider,
@@ -46,6 +46,18 @@ class CompletionRetry(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[0], calls[1])
         self.assertNotIn("retry_on_unavailable", calls[0])
+
+    async def test_reasoning_effort_is_opt_in_and_validated(self):
+        response, calls = await self.request([200], retry=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('reasoning_effort', calls[0])
+        response, calls = await self.request([503, 200], retry=True, effort='low')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls[0]['reasoning_effort'], 'low')
+        self.assertEqual(calls[0], calls[1])
+        response, calls = await self.request([], retry=False, effort='invalid')
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(calls, [])
 
     async def test_repeated_503_stops_after_retry(self):
         with self.assertLogs("uvicorn.error", level="WARNING") as logs:

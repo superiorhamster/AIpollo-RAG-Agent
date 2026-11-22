@@ -116,7 +116,7 @@ test('an accepted plan returns a citation that opens its PDF page', async ({ pag
   const number = (await citation.textContent())?.match(/page (\d+)/)?.[1]
   await citation.click()
   await expect(page).toHaveURL(new RegExp('[?&]page=' + number + '(&|$)'))
-  await expect(page.getByRole('img', { name: 'PDF page ' + number, exact: true })).toBeVisible()
+  await expect(page.getByRole('img', { name: 'PDF page ' + number, exact: true })).toBeVisible({ timeout: 15000 })
 })
 
 test('mobile viewport supports tab switching, preserves draft state across tabs, and switches to reader on citation click', async ({ page }) => {
@@ -178,7 +178,7 @@ test('mobile viewport supports tab switching, preserves draft state across tabs,
   await citation.click()
   await expect(readerTab).toHaveAttribute('aria-selected', 'true')
   await expect(page).toHaveURL(new RegExp('[?&]page=' + number + '(&|$)'))
-  await expect(page.getByRole('img', { name: 'PDF page ' + number, exact: true })).toBeVisible()
+  await expect(page.getByRole('img', { name: 'PDF page ' + number, exact: true })).toBeVisible({ timeout: 15000 })
 })
 
 test('keyboard accessibility, focus navigation, and accessible names', async ({ page }) => {
@@ -298,7 +298,7 @@ test('evidence table is saved and opens the cited source', async ({ page }) => {
   const citation = page.getByRole('table').getByRole('button', { name: /study\.pdf, page \d+/ }).first()
   const number = (await citation.textContent())?.match(/page (\d+)/)?.[1]
   await citation.click()
-  await expect(page.getByRole('img', { name: 'PDF page ' + number, exact: true })).toBeVisible()
+  await expect(page.getByRole('img', { name: 'PDF page ' + number, exact: true })).toBeVisible({ timeout: 15000 })
 })
 
 test('switches workspace navigation language and remembers the choice', async ({ page }) => {

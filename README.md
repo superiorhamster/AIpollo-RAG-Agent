@@ -241,3 +241,26 @@ See the [sentence citation guide](docs/ask-pipeline/sentence-citations.md) for t
 data flow, API and prompts, parser setup, verification commands and troubleshooting.
 The [implementation record](harness/build/change-20261122-sentence-citation-mvp.md)
 records observed model and browser results.
+
+Set `AGENTIC_CURRICULUM_ENABLED=true` alongside `AGENTIC_WORKFLOW_ENABLED=true`
+to enable source-grounded study schedules in Plan → Learn → Study guide. Choose
+1–6 study days. The draft is queued durably; reload the same tab to resume
+viewing it. Each day shows activities, expected materials and source pages.
+Missing chapters, provider failures and invalid drafts remain unaccepted; adjust
+the objective or regenerate. Accept the completed version, then start it to
+produce all materials in order for the student to use on those days. This does
+not schedule future background executions. Disabling the flag stops new draft
+generation while preserving saved plans and approved workflows.
+
+For opt-in multi-paper comparison, set `AGENTIC_RESEARCH_ENABLED=true`. Agent and
+accepted Plan research comparison/evidence-table/synthesis tasks require 2–5
+papers. Each paper receives its own search, with at most two supplementary
+searches across the run. The cited paper × criterion matrix marks missing data;
+a separate semantic check removes unsupported synthesis claims after at most
+one repair. `RESEARCH_MAX_MODEL_CALLS` (default 12),
+`RESEARCH_MAX_TOTAL_OUTPUT_TOKENS` (default 16384), and the existing time/cost
+budgets apply across retries and workflow steps. A budget stop returns verified
+partial findings. Use `RUN_MAX_OUTPUT_TOKENS=2048` for structured research output.
+Ask and historical runs retain their existing execution route. Disable the flag
+to stop routing new runs through the graph; stored results remain readable.
+This workflow stays opt-in pending the real-model coverage/support evaluation.

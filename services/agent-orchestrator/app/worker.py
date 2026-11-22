@@ -88,7 +88,7 @@ class Worker:
                 UPDATE orchestration.runs SET status='failed', error_code='worker_interrupted',
                     lease_id=NULL, lease_until=NULL, updated_at=now()
                 WHERE status='running' AND lease_until < now()
-                  AND (attempts >= :attempts OR (step = 'compose' AND NOT EXISTS (
+                  AND (attempts >= :attempts OR (step = 'compose' AND COALESCE(input->>'research_workflow','')<>'v1' AND NOT EXISTS (
                       SELECT 1 FROM orchestration.plan_versions v
                       WHERE v.plan_id=orchestration.runs.plan_id AND v.version=orchestration.runs.plan_version
                         AND v.workflow IS NOT NULL
@@ -163,19 +163,26 @@ class Worker:
         return not self.budget or (self.input_cost and self.output_cost and cost <= self.budget)
 
     async def complete(self, run, system, content, tokens, *, retry_on_unavailable=False):
-        if run.get("workflow"):
+        if run.get("workflow") or run["input"].get("research_workflow") == "v1":
             estimate = self.estimate_cost(system, content, tokens)
+            if not self.allows_cost(estimate):
+                raise StopRun("cost_limit")
             async with self.database.begin() as connection:
                 reserved = await connection.scalar(text("""
-                    UPDATE orchestration.runs SET cost_reserved=cost_reserved+:cost
+                    UPDATE orchestration.runs SET cost_reserved=cost_reserved+:cost,
+                        output_tokens_reserved=output_tokens_reserved+:tokens, model_calls=model_calls+1
                     WHERE run_id=:run AND lease_id=:lease AND status='running'
                       AND (:budget=0 OR cost_reserved+:cost<=:budget)
+                      AND (:research=false OR (output_tokens_reserved+:tokens<=:token_budget AND model_calls<:call_budget))
                     RETURNING cost_reserved
                 """), {"run": run["run_id"], "lease": run["lease_id"],
-                       "cost": estimate, "budget": self.budget})
+                       "cost": estimate, "budget": self.budget, "tokens": tokens,
+                       "research": run["input"].get("research_workflow") == "v1",
+                       "token_budget": min(32768, max(2048, int(os.environ.get("RESEARCH_MAX_TOTAL_OUTPUT_TOKENS", "16384")))),
+                       "call_budget": min(16, max(1, int(os.environ.get("RESEARCH_MAX_MODEL_CALLS", "12"))))})
             if reserved is None:
                 await self.current(run)
-                raise StopRun("cost_limit")
+                raise StopRun("generation_budget" if run["input"].get("research_workflow") == "v1" else "cost_limit")
             self.execution_cost = reserved
         payload = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
                    "max_tokens": tokens}
@@ -374,8 +381,26 @@ class Worker:
             result["insufficient_evidence"] = not claims and not answer.question
         return result
 
-    async def retrieve(self, run, objective):
+    async def retrieve(self, run, objective, *, research_gap=False):
         await self.current(run)
+        if run["input"].get("research_workflow") == "v1":
+            if len(objective.document_ids) > 1:
+                combined = []
+                for document in objective.document_ids:
+                    combined.extend(await self.retrieve(run, objective.model_copy(update={"document_ids": [document]}), research_gap=research_gap))
+                return combined
+            async with self.database.begin() as connection:
+                reserved = await connection.scalar(text("""
+                    UPDATE orchestration.runs SET research_searches=research_searches+1,
+                        research_gap_searches=research_gap_searches+:gap
+                    WHERE run_id=:run AND lease_id=:lease AND status='running'
+                      AND research_searches<jsonb_array_length(input->'document_ids')+2
+                      AND (:gap=0 OR research_gap_searches<2)
+                    RETURNING research_searches
+                """), {"run": run["run_id"], "lease": run["lease_id"], "gap": int(research_gap)})
+            if reserved is None:
+                await self.current(run)
+                raise StopRun("generation_budget")
         response = await self.client.post(
             f"http://retrieval-service:8000/internal/v1/workspaces/{run['workspace_id']}"
             f"/users/{run['user_id']}/search", timeout=self.budgets.search_caller,
@@ -422,6 +447,13 @@ class Worker:
             """), {"run": run["run_id"], "step": step.step_id, "position": position,
                    "status": status, "result": json.dumps(result, ensure_ascii=False) if result is not None else None})
 
+    @staticmethod
+    def research_enabled(run):
+        objective = run["input"]
+        return (objective.get("research_workflow") == "v1" and objective.get("capability") == "RESEARCH"
+                and objective.get("task") in {"comparison", "evidence_table", "synthesis"}
+                and 2 <= len(set(objective["document_ids"])) <= 5)
+
     async def execute_workflow(self, run):
         definition = PlanDefinition.model_validate({**run["input"], "steps": run["workflow"]})
         async with self.database.connect() as connection:
@@ -451,6 +483,16 @@ class Worker:
                 retrieved_objective = step.objective
                 output = {"evidence": evidence}
             else:
+                scoped_run = {**run, "input": {**step.objective.model_dump(mode="json"),
+                    **({"research_workflow": "v1"} if run["input"].get("research_workflow") == "v1" else {})}}
+                if self.research_enabled(scoped_run):
+                    from .research import ResearchGraph
+                    completed = await ResearchGraph(self, scoped_run, str(step.step_id),
+                        initial_evidence=evidence if retrieved_objective == step.objective else None).execute()
+                    await self.current(run)
+                    await self.validate_sources(run, step.objective)
+                    await self.save_step(run, step, position, "succeeded", {"answer": completed, "cost": self.execution_cost})
+                    continue
                 if retrieved_objective != step.objective:
                     evidence = await self.retrieve(run, step.objective)
                     retrieved_objective = step.objective
@@ -469,15 +511,19 @@ class Worker:
         completed = None
         stage = "history"
         timeout = self.timeout
-        if run.get("workflow") and run.get("execution_started_at"):
+        if (run.get("workflow") or run["input"].get("research_workflow") == "v1") and run.get("execution_started_at"):
             elapsed = (datetime.now(timezone.utc) - run["execution_started_at"]).total_seconds()
             timeout = max(0, timeout - elapsed)
         try:
             deadline = asyncio.get_running_loop().time() + timeout
+            self.deadline = deadline
             async with asyncio.timeout_at(deadline):
                 await self.current(run)
                 if run.get("workflow"):
                     completed = await self.execute_workflow(run)
+                elif self.research_enabled(run):
+                    from .research import ResearchGraph
+                    completed = await ResearchGraph(self, run).execute()
                 else:
                     history = await self.load_history(run)
                     stage = "rewrite"

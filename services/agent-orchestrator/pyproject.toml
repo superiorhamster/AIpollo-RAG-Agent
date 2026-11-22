@@ -10,4 +10,5 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http==1.45.2",
     "fastapi==0.163.1",
     "uvicorn==0.54.0",
+    "langgraph==1.2.24",
 ]

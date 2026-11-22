@@ -44,19 +44,51 @@ class Objective(SourceSelection):
         return self
 
 
+class Citation(Chunk):
+    citation_id: UUID | None = None
+    segment_ids: list[UUID] | None = Field(default=None, min_length=1, max_length=6)
+    regions: list[Region] | None = Field(default=None, max_length=16)
+    precision: Literal["line", "coarse", "page"] | None = None
+    document_id: UUID
+    chunk_id: UUID
+    name: str
+
+
+
 class WorkflowStep(BaseModel, extra="forbid"):
     step_id: UUID
     tool: Literal["retrieve", "compose"]
     action: str = Field(min_length=2, max_length=600)
     objective: Objective
     expected_output: str = Field(min_length=2, max_length=600)
+    day: int | None = Field(default=None, ge=1, le=6)
+    citations: list[Citation] = Field(default_factory=list, max_length=6)
+
+    @model_serializer(mode="wrap")
+    def serialize_step(self, handler):
+        data = handler(self)
+        if self.day is None:
+            data.pop("day", None)
+        if not self.citations:
+            data.pop("citations", None)
+        return data
 
 
 class PlanDefinition(Objective):
     steps: list[WorkflowStep] | None = Field(default=None, min_length=1, max_length=6)
+    curriculum_days: int | None = Field(default=None, ge=1, le=6)
+
+    @model_serializer(mode="wrap")
+    def serialize_plan(self, handler):
+        data = super().serialize_objective(handler)
+        if self.curriculum_days is None:
+            data.pop("curriculum_days", None)
+        return data
 
     @model_validator(mode="after")
     def validate_steps(self):
+        if self.curriculum_days is not None and (self.capability != "LEARN" or self.task != "study_guide" or self.steps is not None):
+            raise ValueError("Curriculum generation requires a Learn study guide without explicit steps")
         if self.task == "socratic_tutor" or any(step.objective.task == "socratic_tutor" for step in self.steps or []):
             raise ValueError("Socratic tutoring requires an Ask conversation")
         if self.steps is None:
@@ -64,6 +96,8 @@ class PlanDefinition(Objective):
         if len({step.step_id for step in self.steps}) != len(self.steps):
             raise ValueError("Step IDs must be unique")
         for step in self.steps:
+            if any(citation.document_id not in step.objective.document_ids for citation in step.citations):
+                raise ValueError("Step citations must belong to its source scope")
             if step.objective.capability != self.capability:
                 raise ValueError("Step capability must match the plan")
             if not set(step.objective.document_ids).issubset(self.document_ids):
@@ -155,14 +189,6 @@ class SearchRewrite(BaseModel, extra="forbid"):
     query: Query
 
 
-class Citation(Chunk):
-    citation_id: UUID | None = None
-    segment_ids: list[UUID] | None = Field(default=None, min_length=1, max_length=6)
-    regions: list[Region] | None = Field(default=None, max_length=16)
-    precision: Literal["line", "coarse", "page"] | None = None
-    document_id: UUID
-    chunk_id: UUID
-    name: str
 
 
 class CitedClaim(BaseModel):
@@ -172,7 +198,17 @@ class CitedClaim(BaseModel):
     source: Literal["document", "conversation"] = "document"
 
 
+class EvidenceCell(BaseModel):
+    document_id: UUID
+    criterion: str = Field(min_length=2, max_length=100)
+    status: Literal["supported", "contradicted", "insufficient"]
+    finding: str = Field(max_length=800)
+    citations: list[Citation] = Field(max_length=4)
+
+
 class Answer(BaseModel):
+    evidence_matrix: list[EvidenceCell] | None = Field(default=None, max_length=20)
+    budget_exhausted: str | None = None
     tutor_question: str | None = None
     kind: Task = "answer"
     claims: list[CitedClaim]
@@ -222,7 +258,10 @@ class PlanView(BaseModel):
     plan_version: int
     objective: Objective
     accepted_at: datetime | None
-    state: Literal["REVIEW", "ACCEPTED", "CANCELLED"]
+    state: Literal["REVIEW", "ACCEPTED", "CANCELLED", "GENERATING", "FAILED"]
+    generation_status: Literal["ready", "queued", "running", "failed"] = "ready"
+    generation_error: str | None = None
+    curriculum_days: int | None = None
     steps: list[Step | WorkflowStep]
     expected_outputs: list[str]
 

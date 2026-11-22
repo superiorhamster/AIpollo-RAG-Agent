@@ -43,12 +43,15 @@ const tasks: Record<Capability, Record<string, string>> = {
   },
 }
 type Objective = { tutor_action?: 'guide' | 'hint' | 'solution'; query: string; document_ids: string[]; capability: Capability; task: string }
-type PlanStep = { step_id: string; tool: 'retrieve' | 'compose'; action: string; objective: Objective; expected_output: string }
+type PlanStep = { day?: number; citations?: Citation[]; step_id: string; tool: 'retrieve' | 'compose'; action: string; objective: Objective; expected_output: string }
 type Plan = {
   plan_id: string
   plan_version: number
   accepted_at: string | null
-  state: 'REVIEW' | 'ACCEPTED' | 'CANCELLED'
+  state: 'REVIEW' | 'ACCEPTED' | 'CANCELLED' | 'GENERATING' | 'FAILED'
+  generation_status?: 'ready' | 'queued' | 'running' | 'failed'
+  generation_error?: string | null
+  curriculum_days?: number | null
   objective: Objective
   steps: ({ tool: string; action: string } & Partial<PlanStep>)[]
   expected_outputs: string[]
@@ -57,7 +60,8 @@ type CitationMode = 'segment' | 'chunk'
 const citationModeKey = 'aipollo.ask.citation-mode'
 
 type Citation = CitationTarget & { chunk_id: string; name: string }
-type Result = { tutor_question?: string | null; kind?: string; claims: {
+type MatrixCell = { document_id: string; criterion: string; status: 'supported' | 'contradicted' | 'insufficient'; finding: string; citations: Citation[] }
+type Result = { evidence_matrix?: MatrixCell[] | null; budget_exhausted?: string | null; tutor_question?: string | null; kind?: string; claims: {
   text: string
   fields?: Record<string, string>
   citations: Citation[]
@@ -104,7 +108,9 @@ export function InteractionPanel({
   const [mode, setMode] = useState<Mode>('ASK')
   const [citationMode, setCitationMode] = useState<CitationMode>('segment')
   const [plan, setPlan] = useState<Plan>()
-  const [features, setFeatures] = useState({ custom_plan: false, socratic_tutor: false })
+  const [features, setFeatures] = useState({ custom_plan: false, socratic_tutor: false, curriculum: false, research: false })
+  const [curriculumDays, setCurriculumDays] = useState(0)
+  const [selectedTask, setSelectedTask] = useState('answer')
   useEffect(() => {
     let current = true
     void api<typeof features>(base + '/workflow-features').then(value => { if (current) setFeatures(value) })
@@ -136,6 +142,50 @@ export function InteractionPanel({
   const retryRunIds = useRef(new Map<string, string>())
   const queryField = useRef<HTMLTextAreaElement>(null)
   const locked = busy || activeId !== undefined || retryingId !== undefined
+  const curriculumKey = 'aipollo.curriculum.' + workspaceId
+  useEffect(() => {
+    let current = true
+    let saved: string | null = null
+    try { saved = window.sessionStorage.getItem(curriculumKey) } catch { /* Storage may be disabled. */ }
+    if (saved && /^[a-f0-9-]{36}$/.test(saved)) {
+      void api<Plan>(base + '/plans/' + saved).then(value => {
+        if (!current) return
+        setPlan(value)
+        setMode('PLAN')
+      }).catch(() => {
+        try { window.sessionStorage.removeItem(curriculumKey) } catch { /* Storage may be disabled. */ }
+      })
+    }
+    return () => { current = false }
+  }, [base, curriculumKey])
+  useEffect(() => {
+    if (!plan) return
+    try {
+      if (plan.curriculum_days && plan.state !== 'CANCELLED') window.sessionStorage.setItem(curriculumKey, plan.plan_id)
+      else window.sessionStorage.removeItem(curriculumKey)
+    } catch { /* The plan remains usable without storage. */ }
+  }, [plan, curriculumKey])
+  useEffect(() => {
+    if (!plan || plan.state !== 'GENERATING') return
+    let current = true
+    let timer: ReturnType<typeof setTimeout>
+    let delay = 1000
+    async function refresh() {
+      try {
+        const updated = await api<Plan>(base + '/plans/' + plan!.plan_id)
+        if (!current) return
+        setPlan(updated)
+        if (updated.state !== 'GENERATING') return
+      } catch (failure) {
+        if (!current) return
+        setError(errorMessage(failure))
+      }
+      delay = Math.min(delay * 1.5, 5000)
+      timer = setTimeout(() => void refresh(), delay)
+    }
+    timer = setTimeout(() => void refresh(), delay)
+    return () => { current = false; clearTimeout(timer) }
+  }, [base, plan?.plan_id, plan?.plan_version, plan?.state])
 
   useEffect(() => {
     try {
@@ -282,16 +332,24 @@ export function InteractionPanel({
       setError('Enter a question and choose between 1 and 100 sources.')
       return
     }
+    if (mode !== 'ASK' && features.research && input.capability === 'RESEARCH'
+      && ['comparison', 'evidence_table', 'synthesis'].includes(input.task)
+      && (input.document_ids.length < 2 || input.document_ids.length > 5)) {
+      setError(text('Choose 2–5 papers for in-depth comparison.', 'Chọn 2–5 bài báo để so sánh chuyên sâu.'))
+      return
+    }
+    const curriculum_days = mode === 'PLAN' && features.curriculum && input.capability === 'LEARN'
+      && input.task === 'study_guide' && curriculumDays > 0 ? curriculumDays : undefined
     void perform(async () => {
       if (editing && plan) {
         const revised = await api<Plan>(base + '/plans/' + plan.plan_id, 'PATCH', {
-          ...input,
+          ...input, curriculum_days,
           expected_version: plan.plan_version,
         })
         setPlan(revised)
         setEditing(false)
       } else if (mode === 'PLAN') {
-        const created = await api<Plan>(base + '/plans', 'POST', input, crypto.randomUUID())
+        const created = await api<Plan>(base + '/plans', 'POST', { ...input, curriculum_days }, crypto.randomUUID())
         setPlan(created)
         if (queryField.current && queryField.current === element.elements.namedItem('query')) queryField.current.value = ''
       } else {
@@ -350,6 +408,7 @@ export function InteractionPanel({
   }
 
   function newChat() {
+    try { window.sessionStorage.removeItem(curriculumKey) } catch { /* Storage may be disabled. */ }
     setConversation(undefined)
     setRun(undefined)
     setHistory([])
@@ -413,6 +472,18 @@ export function InteractionPanel({
             </button>}
         </div>}
         {retryErrors[original.run_id] && item.error_code && <p role="alert">{retryErrors[original.run_id]}</p>}
+        {item.result?.budget_exhausted && <p role="status">{text('The run reached its budget. Verified findings are shown; incomplete cells are marked.', 'Đã hết ngân sách lượt chạy. Các kết quả đã kiểm tra được giữ lại; ô còn thiếu được đánh dấu.')}</p>}
+        {item.result?.evidence_matrix && <div className="table-scroll" tabIndex={0} role="region" aria-label={text('Evidence matrix', 'Ma trận bằng chứng')}>
+          <table><caption>{text('Evidence by paper and criterion', 'Bằng chứng theo bài báo và tiêu chí')}</caption>
+            <thead><tr><th>{text('Paper', 'Bài báo')}</th><th>{text('Criterion', 'Tiêu chí')}</th><th>{text('Finding', 'Kết quả')}</th><th>{text('Status and sources', 'Trạng thái và nguồn')}</th></tr></thead>
+            <tbody>{item.result.evidence_matrix.map(cell => <tr key={cell.document_id + ':' + cell.criterion}>
+              <th scope="row">{documents.find(doc => doc.document_id === cell.document_id)?.name ?? text('Unavailable source', 'Nguồn không còn khả dụng')}</th>
+              <td>{cell.criterion}</td><td>{cell.finding || text('Not enough evidence', 'Chưa đủ bằng chứng')}</td>
+              <td>{cell.status}{cell.citations.map(citation => <button type="button" className="citation-pill" key={citation.chunk_id}
+                onClick={() => onCitation(citation)}>{citation.name}, page {citation.page}</button>)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
         {item.result?.insufficient_evidence && <div className="approval-notice" role="status">
           <DesignIcon name="warning" /><div><strong>Not enough evidence in the selected sources</strong>
             <p>Choose more sources and try again.</p></div>
@@ -475,6 +546,8 @@ export function InteractionPanel({
   function editPlan(target: Plan) {
     setCapability(target.objective.capability)
     setSelectedSources(target.objective.document_ids.filter(id => documents.some(doc => doc.document_id === id)))
+    setCurriculumDays(target.curriculum_days ?? 0)
+    setSelectedTask(target.objective.task)
     setEditing(true)
   }
 
@@ -506,7 +579,7 @@ export function InteractionPanel({
             <header className="plan-heading">
               <h2 aria-label={`Plan version ${visiblePlan.plan_version}`}>{text('Proposed plan', 'Kế hoạch đề xuất')}</h2>
               <span className={`badge badge-${visiblePlan.state === 'ACCEPTED' ? 'success' : 'primary'}`}>
-                {visiblePlan.state === 'REVIEW' ? 'Ready for review' : visiblePlan.state === 'ACCEPTED' ? 'Accepted' : 'Cancelled'}
+                {visiblePlan.state === 'REVIEW' ? 'Ready for review' : visiblePlan.state === 'ACCEPTED' ? 'Accepted' : visiblePlan.state === 'GENERATING' ? text('Preparing schedule', 'Đang lập lịch học') : visiblePlan.state === 'FAILED' ? text('Draft failed', 'Chưa tạo được bản nháp') : 'Cancelled'}
               </span>
               <span className="badge badge-neutral">v{visiblePlan.plan_version}</span>
             </header>
@@ -518,14 +591,21 @@ export function InteractionPanel({
                 <li key={state} aria-current={visiblePlan.state === state ? 'step' : undefined}>{label}</li>
               ))}
             </ol>}
+            {visiblePlan.state === 'GENERATING' && <p role="status">{text('Reading the selected sources and preparing a study schedule. You can reload this page.', 'Đang đọc nguồn và lập lịch học. Bạn có thể tải lại trang.')}</p>}
+            {visiblePlan.state === 'FAILED' && <p role="alert">{visiblePlan.generation_error === 'curriculum_scope_not_found'
+              ? text('The requested topic or chapter was not found. Adjust the goal or choose other sources.', 'Không tìm thấy chủ đề hoặc chương yêu cầu. Hãy sửa mục tiêu hoặc chọn nguồn khác.')
+              : text('Could not prepare a valid schedule. Regenerate to retry.', 'Chưa tạo được lịch học hợp lệ. Chọn Tạo lại để thử lại.')}</p>}
+            {visiblePlan.curriculum_days && <p>{text('Study days', 'Số ngày học')}: {visiblePlan.curriculum_days}. {text('Starting the accepted plan creates all learning materials in order.', 'Chạy kế hoạch đã duyệt sẽ tạo lần lượt toàn bộ học liệu.')}</p>}
             <p className="plan-goal"><strong>GOAL</strong> {visiblePlan.objective.query}</p>
             <ol className="plan-steps">{visiblePlan.steps.map((step, index) => (
               <li key={index}>
                 <span className="plan-step-number">{index + 1}</span>
-                <span>{step.action}
+                <span>{step.day && <strong>{text('Day', 'Ngày')} {step.day}: </strong>}{step.action}
                   {step.objective && <small>{' · ' + tasks[step.objective.capability][step.objective.task] + ' · ' + step.objective.query}</small>}
                   {step.objective && <small>{' · ' + step.objective.document_ids.map(id => documents.find(doc => doc.document_id === id)?.name ?? 'Unavailable source').join(', ')}</small>}
                   {step.expected_output && <small>{' · ' + step.expected_output}</small>}
+                  {step.citations?.map(citation => <button type="button" className="citation-pill" key={citation.chunk_id}
+                    onClick={() => onCitation(citation)}>{citation.name}, page {citation.page}</button>)}
                 </span>
                 <span className="badge badge-neutral">{step.tool}</span>
               </li>
@@ -592,11 +672,11 @@ export function InteractionPanel({
               <button type="button" className="secondary sm" disabled={locked} onClick={() => editPlan(visiblePlan)}>{text('Edit plan', 'Chỉnh sửa')}</button>
               <button type="button" className="secondary sm" disabled={locked} onClick={() => review('regenerate', visiblePlan)}>{text('Regenerate', 'Tạo lại')}</button>
               <button type="button" className="danger sm plan-cancel" disabled={locked} onClick={() => review('cancel', visiblePlan)}>{text('Cancel plan', 'Hủy kế hoạch')}</button>
-              {visiblePlan.state === 'REVIEW'
+              {(visiblePlan.state === 'REVIEW' || visiblePlan.state === 'ACCEPTED') && (visiblePlan.state === 'REVIEW'
                 ? <button type="button" className="sm" disabled={locked} onClick={() => review('accept', visiblePlan)}>{text('Accept plan', 'Duyệt kế hoạch')}</button>
-                : <button type="button" className="sm" disabled={locked} onClick={() => review('run', visiblePlan)}>{text('Run accepted plan', 'Chạy kế hoạch đã duyệt')}</button>}
-              {features.custom_plan && <button type="button" className="secondary sm" disabled={locked} onClick={() => setWorkflowDraft(visiblePlan.steps.map(step => ({
-                step_id: step.step_id ?? crypto.randomUUID(), tool: step.tool as PlanStep['tool'], action: step.action,
+                : <button type="button" className="sm" disabled={locked} onClick={() => review('run', visiblePlan)}>{text('Run accepted plan', 'Chạy kế hoạch đã duyệt')}</button>)}
+              {features.custom_plan && visiblePlan.steps.length > 0 && <button type="button" className="secondary sm" disabled={locked} onClick={() => setWorkflowDraft(visiblePlan.steps.map(step => ({
+                day: step.day, step_id: step.step_id ?? crypto.randomUUID(), tool: step.tool as PlanStep['tool'], action: step.action,
                 objective: step.objective ?? visiblePlan.objective,
                 expected_output: step.expected_output ?? 'Answer with source citations',
               })))}>{text('Customize activities', 'Tùy chỉnh hoạt động')}</button>}
@@ -634,13 +714,22 @@ export function InteractionPanel({
             <option value="segment">{text('Segment', 'Đoạn')}</option>
             <option value="chunk">{text('Chunk', 'Khối')}</option>
           </select>}
+          {effectiveMode === 'PLAN' && features.curriculum && capability === 'LEARN' && <label>
+            {text('Study schedule', 'Lịch học')}
+            <select aria-label={text('Study days', 'Số ngày học')} value={curriculumDays} disabled={locked}
+              onChange={event => { setCurriculumDays(Number(event.currentTarget.value)); if (Number(event.currentTarget.value)) setSelectedTask('study_guide') }}>
+              <option value={0}>{text('Manual plan', 'Kế hoạch thủ công')}</option>
+              {[1, 2, 3, 4, 5, 6].map(day => <option value={day} key={day}>{day} {text('days (Study guide)', 'ngày (Study guide)')}</option>)}
+            </select>
+          </label>}
           <span className="badge badge-neutral composer-source-count"><DesignIcon name="source-count" /> {selectedSources.length} sources</span>
           <select aria-label="Capability" value={capability} disabled={locked}
-            onChange={event => setCapability(event.currentTarget.value as Capability)}>
+            onChange={event => { setCapability(event.currentTarget.value as Capability); setSelectedTask('answer'); setCurriculumDays(0) }}>
             <option value="LEARN">Learn</option><option value="RESEARCH">Research</option><option value="WRITE">Write</option>
           </select>
-          <select aria-label="Output" name="task" key={capability} disabled={locked}
-            defaultValue={editing && plan?.objective.capability === capability ? plan.objective.task : 'answer'}>
+          <select aria-label="Output" name="task" disabled={locked}
+            value={selectedTask === 'socratic_tutor' && effectiveMode !== 'ASK' ? 'answer' : selectedTask}
+            onChange={event => setSelectedTask(event.currentTarget.value)}>
             {Object.entries(tasks[capability]).filter(([value]) => value !== 'socratic_tutor' || (features.socratic_tutor && effectiveMode === 'ASK')).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
           <details className="composer-mobile-sources">

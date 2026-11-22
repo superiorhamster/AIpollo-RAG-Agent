@@ -20,6 +20,7 @@ from rag_db import database_ready, install_database_errors, open_database
 from rag_http import ACCESS_COOKIE, ACCESS_FORMAT, ApiError, health_response, install_http, request_id, require_service, unauthorized, unavailable
 
 from .types import Conversation, EditPlan, Objective, PlanDefinition, PlanView, RunView, RunStepView, StartRun, Version
+from .curriculum import CurriculumWorker
 from .history import input_limit, prior_history
 from .worker import ASK_COMPLETION_UNAVAILABLE, Worker, authorize
 
@@ -42,13 +43,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.database = open_database()
     async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
         app.state.client = client
-        worker = asyncio.create_task(Worker(app.state.database, client).loop())
+        workers = [asyncio.create_task(Worker(app.state.database, client).loop()),
+                   asyncio.create_task(CurriculumWorker(app.state.database, client).loop())]
         try:
             yield
         finally:
-            worker.cancel()
-            with suppress(asyncio.CancelledError):
-                await worker
+            for worker in workers:
+                worker.cancel()
+            for worker in workers:
+                with suppress(asyncio.CancelledError):
+                    await worker
             await app.state.database.dispose()
 
 
@@ -64,7 +68,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/readyz")
 async def readiness() -> Response:
-    return health_response(SERVICE, await database_ready(app.state.database, "orchestration", "orchestration_004"))
+    return health_response(SERVICE, await database_ready(app.state.database, "orchestration", "orchestration_006"))
 
 
 def missing() -> ApiError:
@@ -121,18 +125,25 @@ async def owned_plan(connection: AsyncConnection, keys: dict, lock: bool = False
 
 async def plan_payload(connection: AsyncConnection, plan) -> dict:
     result = await connection.execute(text("""
-        SELECT v.input, v.workflow, a.accepted_at FROM orchestration.plan_versions v
+        SELECT v.input, v.workflow, a.accepted_at, d.days,
+               CASE WHEN d.status = 'succeeded' THEN 'ready' ELSE COALESCE(d.status, 'ready') END AS generation_status,
+               d.error_code FROM orchestration.plan_versions v
+        LEFT JOIN orchestration.plan_drafts d ON d.plan_id=v.plan_id AND d.version=v.version
         LEFT JOIN orchestration.acceptances a ON a.plan_id = v.plan_id AND a.version = v.version
         WHERE v.plan_id=:id AND v.version=:version
     """), {"id": plan["plan_id"], "version": plan["current_version"]})
     revision = result.mappings().one()
+    pending = revision["generation_status"] != "ready"
+    state = ("CANCELLED" if plan["cancelled"] else "FAILED" if revision["generation_status"] == "failed"
+             else "GENERATING" if pending else "ACCEPTED" if revision["accepted_at"] else "REVIEW")
     return {"plan_id": plan["plan_id"], "plan_version": plan["current_version"],
-            "state": "CANCELLED" if plan["cancelled"] else "ACCEPTED" if revision["accepted_at"] else "REVIEW",
+            "state": state, "generation_status": revision["generation_status"],
+            "generation_error": revision["error_code"], "curriculum_days": revision["days"],
             "objective": revision["input"], "accepted_at": revision["accepted_at"],
-            "steps": revision["workflow"] or [
+            "steps": [] if pending else revision["workflow"] or [
                 {"tool": "retrieve", "action": "Search the selected workspace sources."},
                 {"tool": "compose", "action": "Write a grounded answer with verified source links."},
-            ], "expected_outputs": ([step["expected_output"] for step in revision["workflow"]]
+            ], "expected_outputs": [] if pending else ([step["expected_output"] for step in revision["workflow"]]
                                  if revision["workflow"] else ["Answer with citations or an insufficient-evidence result"])}
 
 
@@ -142,12 +153,24 @@ async def add_revision(connection: AsyncConnection, plan_id: UUID, version: int,
         VALUES (:id, :version, CAST(:input AS jsonb), CAST(:workflow AS jsonb))
     """), {"id": plan_id, "version": version, "input": Objective.model_validate(objective.model_dump()).model_dump_json(),
             "workflow": json.dumps([step.model_dump(mode="json") for step in objective.steps]) if objective.steps else None})
+    if objective.curriculum_days is not None:
+        await connection.execute(text("""
+            INSERT INTO orchestration.plan_drafts (plan_id, version, days) VALUES (:id, :version, :days)
+        """), {"id": plan_id, "version": version, "days": objective.curriculum_days})
+
+
+def check_plan_features(data: PlanDefinition) -> None:
+    if (data.steps or data.curriculum_days) and os.environ.get("AGENTIC_WORKFLOW_ENABLED") != "true":
+        raise ApiError(409, "feature_disabled", "Custom workflows are not enabled.")
+    if data.curriculum_days and os.environ.get("AGENTIC_CURRICULUM_ENABLED") != "true":
+        raise ApiError(409, "feature_disabled", "Curriculum generation is not enabled.")
 
 
 @app.post(BASE + "/plans", status_code=201, response_model=PlanView)
 async def create_plan(workspace_id: UUID, data: PlanDefinition, key: Key, user_id: Actor, request: Request):
-    if data.steps and os.environ.get("AGENTIC_WORKFLOW_ENABLED") != "true":
-        raise ApiError(409, "feature_disabled", "Custom workflows are not enabled.")
+    check_plan_features(data)
+    if any(step.citations for step in data.steps or []):
+        raise ApiError(422, "invalid_plan", "Citation snapshots are assigned by the curriculum planner.")
     keys = scope(workspace_id, user_id, uuid4())
     async with app.state.database.begin() as connection:
         created = await connection.scalar(text("""
@@ -182,13 +205,20 @@ async def revise(workspace_id: UUID, plan_id: UUID, expected: int, user_id: UUID
         if plan["cancelled"] or plan["current_version"] != expected:
             raise stale()
         old = await plan_payload(connection, plan)
-        values = incoming.model_dump() if incoming else old["objective"]
-        if values.get("steps") is None and "step_id" in old["steps"][0]:
+        values = incoming.model_dump() if incoming else {**old["objective"], "curriculum_days": old["curriculum_days"]}
+        if (not values.get("curriculum_days") and values.get("steps") is None and old["steps"]
+                and "step_id" in old["steps"][0]):
             values = {**values, "steps": old["steps"]}
         try:
             objective = PlanDefinition.model_validate(values)
         except ValueError as exc:
             raise ApiError(422, "invalid_plan", "Adjust the activities to match the new capability and source scope.") from exc
+        check_plan_features(objective)
+        await connection.execute(text("""
+            UPDATE orchestration.plan_drafts SET status='failed', error_code='draft_superseded',
+                lease_id=NULL, lease_until=NULL
+            WHERE plan_id=:id AND status IN ('queued','running')
+        """), {"id": plan_id})
         await add_revision(connection, plan_id, expected + 1, objective)
         await connection.execute(text("UPDATE orchestration.plans SET current_version=:version WHERE plan_id=:id"),
                                  {"version": expected + 1, "id": plan_id})
@@ -197,8 +227,9 @@ async def revise(workspace_id: UUID, plan_id: UUID, expected: int, user_id: UUID
 
 @app.patch(BASE + "/plans/{plan_id}", response_model=PlanView)
 async def edit_plan(workspace_id: UUID, plan_id: UUID, data: EditPlan, user_id: Actor):
-    if data.steps and os.environ.get("AGENTIC_WORKFLOW_ENABLED") != "true":
-        raise ApiError(409, "feature_disabled", "Custom workflows are not enabled.")
+    check_plan_features(data)
+    if any(step.citations for step in data.steps or []):
+        raise ApiError(422, "invalid_plan", "Citation snapshots are assigned by the curriculum planner.")
     return await revise(workspace_id, plan_id, data.expected_version, user_id,
                         PlanDefinition.model_validate(data.model_dump()))
 
@@ -215,6 +246,9 @@ async def accept_plan(workspace_id: UUID, plan_id: UUID, data: Version, key: Key
         plan = await owned_plan(connection, keys, lock=True)
         if plan["cancelled"] or data.plan_version != plan["current_version"]:
             raise stale()
+        payload = await plan_payload(connection, plan)
+        if payload["generation_status"] != "ready":
+            raise ApiError(409, "plan_not_ready", "Wait for a valid draft before accepting this version.")
         reused = await connection.scalar(text("""
             SELECT version FROM orchestration.acceptances WHERE plan_id=:id AND request_key=:key
         """), {"id": plan_id, "key": key})
@@ -327,6 +361,12 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
         run_input = objective.model_dump(mode="json")
         if citation_mode is not None:
             run_input["citation_mode"] = citation_mode
+        if (data.mode in {"AGENT", "PLAN"} and objective.capability == "RESEARCH"
+                and objective.task in {"comparison", "evidence_table", "synthesis"}
+                and os.environ.get("AGENTIC_RESEARCH_ENABLED") == "true"):
+            if not 2 <= len(set(objective.document_ids)) <= 5:
+                raise ApiError(422, "research_source_limit", "Choose 2–5 papers for in-depth comparison.")
+            run_input["research_workflow"] = "v1"
         result = await connection.execute(text(f"""
             INSERT INTO orchestration.runs (
                 run_id, workspace_id, user_id, interaction, input, conversation_id, plan_id, plan_version,
@@ -461,5 +501,8 @@ async def get_run_steps(workspace_id: UUID, run_id: UUID, user_id: Actor):
 
 @app.get(BASE + "/workflow-features")
 async def workflow_features(workspace_id: UUID, user_id: Actor):
-    return {"custom_plan": os.environ.get("AGENTIC_WORKFLOW_ENABLED") == "true",
-            "socratic_tutor": os.environ.get("AGENTIC_TUTOR_ENABLED") == "true"}
+    return {"research": os.environ.get("AGENTIC_RESEARCH_ENABLED") == "true",
+            "custom_plan": os.environ.get("AGENTIC_WORKFLOW_ENABLED") == "true",
+            "socratic_tutor": os.environ.get("AGENTIC_TUTOR_ENABLED") == "true",
+            "curriculum": (os.environ.get("AGENTIC_CURRICULUM_ENABLED") == "true"
+                           and os.environ.get("AGENTIC_WORKFLOW_ENABLED") == "true")}
