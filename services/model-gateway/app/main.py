@@ -293,6 +293,21 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
                                 input_tokens=usage.get("prompt_tokens"),
                                 output_tokens=usage.get("completion_tokens"))
     except (httpx.HTTPError, TimeoutError, ValueError, KeyError, IndexError, ValidationError) as exc:
+        if response is not None and response.is_error:
+            # Error messages can echo prompts. Log only allowlisted machine-readable fields.
+            try:
+                error = response.json().get("error", {})
+                error = error if isinstance(error, dict) else {}
+            except (ValueError, AttributeError):
+                error = {}
+            code = error.get("code") or error.get("type")
+            code = code if isinstance(code, str) and code in {"context_length_exceeded", "invalid_request_error", "unsupported_parameter",
+                "invalid_value", "model_not_found", "invalid_api_key", "rate_limit_exceeded", "insufficient_quota"} else "other"
+            param = error.get("param")
+            param = param if isinstance(param, str) and param in {"messages", "max_tokens", "max_completion_tokens",
+                "response_format", "reasoning_effort", "model"} else None
+            LOG.warning("Chat rejection request_id=%s code=%s param=%s input_bytes=%s max_tokens=%s",
+                        request_id(request), code, param, sum(len(item.content.encode()) for item in data.messages), data.max_tokens)
         LOG.warning("Chat completion failure request_id=%s error=%s elapsed_ms=%.2f upstream_status=%s",
                     request_id(request), type(exc).__name__, (perf_counter() - started) * 1000,
                     response.status_code if response is not None else None)

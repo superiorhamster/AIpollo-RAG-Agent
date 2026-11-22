@@ -11,7 +11,7 @@ from app.main import app
 
 
 class CompletionRetry(unittest.IsolatedAsyncioTestCase):
-    async def request(self, statuses, *, retry, effort="", response_format="", content="answer"):
+    async def request(self, statuses, *, retry, effort="", response_format="", content="answer", error=None):
         calls = []
 
         def upstream(request):
@@ -20,6 +20,8 @@ class CompletionRetry(unittest.IsolatedAsyncioTestCase):
             status = statuses[len(calls) - 1]
             if status is None:
                 raise httpx.ReadTimeout("fixture timeout", request=request)
+            if error is not None:
+                return httpx.Response(status,json={"error":error})
             return httpx.Response(status, json={"choices": [{"finish_reason": "length" if content is None else "stop",
                 "message": {"content": content, "reasoning_content": "private-fixture-reasoning"}}],
                 "usage": {"completion_tokens": 2048, "completion_tokens_details": {"reasoning_tokens": 2048}}})
@@ -81,6 +83,18 @@ class CompletionRetry(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 1)
         self.assertTrue(any('finish_reason=length' in line and 'reasoning_tokens=2048' in line for line in logs.output))
         self.assertFalse(any('private-fixture-reasoning' in line for line in logs.output))
+
+    async def test_rejection_logs_only_allowlisted_codes_and_parameters(self):
+        for error, code, param in [
+            ({'code':'context_length_exceeded','param':'messages','message':'private-provider-fixture'}, 'context_length_exceeded', 'messages'),
+            ({'code':['private-provider-fixture'],'param':'private-provider-fixture','message':'private-provider-fixture'}, 'other', 'None'),
+        ]:
+            with self.assertLogs('uvicorn.error',level='WARNING') as logs:
+                response, calls = await self.request([400],retry=False,error=error)
+            self.assertEqual(response.status_code,503)
+            self.assertEqual(len(calls),1)
+            self.assertTrue(any('code='+code in line and 'param='+param in line for line in logs.output))
+            self.assertFalse(any('private-provider-fixture' in line for line in logs.output))
 
     async def test_repeated_503_stops_after_retry(self):
         with self.assertLogs("uvicorn.error", level="WARNING") as logs:
