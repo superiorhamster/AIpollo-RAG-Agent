@@ -1,7 +1,6 @@
 """Preview-only academic paragraphs verified before the explicit artifact save."""
 from langgraph.graph import END, START, StateGraph
-from .research import ResearchGraph, State, balanced_context
-from .types import GeneratedAnswer
+from .research import ResearchGraph, State, balanced_context, CandidateAnswer
 
 
 class CitedDraft(ResearchGraph):
@@ -34,6 +33,8 @@ class CitedDraft(ResearchGraph):
             claims=[]
             for claim in parsed.claims:
                 ids=list(dict.fromkeys(str(identifier) for identifier in claim.evidence))
+                if not ids:
+                    continue
                 if any(identifier not in supplied for identifier in ids):
                     raise ValueError('Citation outside supplied evidence')
                 claims.append({'text':claim.text,'fields':{},'citations':[supplied[identifier] for identifier in ids]})
@@ -42,7 +43,7 @@ class CitedDraft(ResearchGraph):
             'Keep one verifiable factual claim per entry. Preserve exact numbers and units; omit claims without evidence. '
             'Schema: {"claims":[{"text":string,"evidence":[passage UUID]}]}. ' +
             ('Rewrite or remove unsupported claims from the prior attempt.' if repair else ''),
-            {'objective':self.objective.query,'passages':context},GeneratedAnswer,validate)
+            {'objective':self.objective.query,'passages':context},CandidateAnswer,validate)
         return {'answer':answer}
 
     async def synthesize(self, state, repair=False):

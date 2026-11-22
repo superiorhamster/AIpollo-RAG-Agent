@@ -342,6 +342,29 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         # Initial grading plus one grading of new evidence; the unchanged A read needs no model call.
         self.assertEqual(grading_calls,2)
 
+    async def test_uncited_candidates_are_removed_before_semantic_verification(self):
+        original = self.upstream
+        marker = 'private-uncited-candidate-fixture'
+        def upstream(request):
+            if request.url.path.endswith('/completions'):
+                system = json.loads(request.content)['messages'][0]['content']
+                if 'Verify each claim semantically' in system:
+                    self.assertNotIn(marker,request.content.decode())
+                response = original(request)
+                if 'Synthesize only' in system or 'Draft a cited paragraph' in system:
+                    output = json.loads(response.json()['text'])
+                    output['claims'].append({'text':marker,'evidence':[]})
+                    return httpx.Response(200,json={'text':json.dumps(output)})
+                return response
+            return original(request)
+        self.upstream = upstream
+        for writing in [False,True]:
+            if writing:self.objective={**self.objective,'capability':'WRITE','task':'draft','document_ids':[str(self.a)]}
+            result = await self.run_research()
+            self.assertEqual(result['status'],'succeeded',result)
+            self.assertTrue(result['result']['claims'])
+            self.assertTrue(all(claim['citations'] and marker not in claim['text'] for claim in result['result']['claims']))
+
     async def test_context_reserves_each_paper_under_competition(self):
         dense = [self.evidence(self.a,uuid4(),'A'*6000) for _ in range(6)]
         sparse = [self.evidence(self.b,self.cb,'Only B reports Vietnamese dataset V2.')]
