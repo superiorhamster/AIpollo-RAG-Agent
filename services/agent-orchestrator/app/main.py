@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from rag_db import database_ready, install_database_errors, open_database
 from rag_http import ACCESS_COOKIE, ACCESS_FORMAT, ApiError, health_response, install_http, request_id, require_service, unauthorized, unavailable
 
-from .types import Conversation, EditPlan, Objective, PlanDefinition, PlanView, RunView, RunStepView, StartRun, Version
+from .types import Conversation, EditPlan, Objective, PlanDefinition, PlanView, RunView, RunStepView, StartRun, Version, WorkflowFeatures
 from .curriculum import CurriculumWorker
 from .history import input_limit, prior_history
 from .worker import ASK_COMPLETION_UNAVAILABLE, Worker, authorize
@@ -342,6 +342,8 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
         objective = await pinned_objective(connection, data, workspace_id, user_id)
         if objective.task == "socratic_tutor" and os.environ.get("AGENTIC_TUTOR_ENABLED") != "true":
             raise ApiError(409, "feature_disabled", "Socratic tutoring is not enabled.")
+        if objective.task == "mock_defense" and os.environ.get("AGENTIC_DEFENSE_ENABLED") != "true":
+            raise ApiError(409, "feature_disabled", "Mock defense is not enabled.")
         conversation = data.conversation_id
         history = None
         citation_mode = data.citation_mode
@@ -359,6 +361,8 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
                     VALUES (:conversation, :workspace, :user)
                 """), {**keys, "conversation": conversation})
         run_input = objective.model_dump(mode="json")
+        if objective.task == "mock_defense":
+            run_input["defense_workflow"] = "v1"
         if citation_mode is not None:
             run_input["citation_mode"] = citation_mode
         if (data.mode in {"AGENT", "PLAN"} and objective.capability == "RESEARCH"
@@ -367,6 +371,9 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
             if not 2 <= len(set(objective.document_ids)) <= 5:
                 raise ApiError(422, "research_source_limit", "Choose 2–5 papers for in-depth comparison.")
             run_input["research_workflow"] = "v1"
+        if (data.mode in {"AGENT", "PLAN"} and objective.capability == "WRITE" and objective.task == "draft"
+                and os.environ.get("AGENTIC_WRITING_ENABLED") == "true"):
+            run_input["verified_writing"] = "v1"
         result = await connection.execute(text(f"""
             INSERT INTO orchestration.runs (
                 run_id, workspace_id, user_id, interaction, input, conversation_id, plan_id, plan_version,
@@ -483,7 +490,7 @@ async def artifact_run(workspace_id: UUID, user_id: UUID, run_id: UUID, request:
         result = payload["result"]
         if result:
             claims = [claim for claim in result["claims"] if claim.get("source") != "conversation"]
-            public_result = {key: value for key, value in result.items() if key != "tutor_question"}
+            public_result = {key: value for key, value in result.items() if key not in {"tutor_question", "defense_review"}}
             payload["result"] = {**public_result, "claims": claims, "insufficient_evidence": not claims}
         return payload
 
@@ -499,9 +506,12 @@ async def get_run_steps(workspace_id: UUID, run_id: UUID, user_id: Actor):
         return [dict(row) for row in rows.mappings()]
 
 
-@app.get(BASE + "/workflow-features")
+@app.get(BASE + "/workflow-features", response_model=WorkflowFeatures)
 async def workflow_features(workspace_id: UUID, user_id: Actor):
-    return {"research": os.environ.get("AGENTIC_RESEARCH_ENABLED") == "true",
+    return {"mock_defense": os.environ.get("AGENTIC_DEFENSE_ENABLED") == "true",
+            "verified_writing": os.environ.get("AGENTIC_WRITING_ENABLED") == "true",
+            "discovery": os.environ.get("AGENTIC_DISCOVERY_ENABLED") == "true",
+            "research": os.environ.get("AGENTIC_RESEARCH_ENABLED") == "true",
             "custom_plan": os.environ.get("AGENTIC_WORKFLOW_ENABLED") == "true",
             "socratic_tutor": os.environ.get("AGENTIC_TUTOR_ENABLED") == "true",
             "curriculum": (os.environ.get("AGENTIC_CURRICULUM_ENABLED") == "true"

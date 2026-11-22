@@ -97,3 +97,7 @@ existing Pydantic/HTTPX calls continue to own model/API validation. Graph state,
 leases and approval remain in the Orchestrator's PostgreSQL schema, using JSON
 snapshots rather than a second checkpoint authority. No LangSmith credentials
 or tracing endpoint are configured. See the [workflow API](https://docs.langchain.com/oss/python/langgraph/workflows-agents).
+
+Adaptive flashcards use `fsrs==6.3.3` only in Artifact Service. The library
+implements FSRS scheduling; the service owns UTC clocks, user scoping, replay
+keys and concurrency versions. No optimizer extras or ML runtime are installed.

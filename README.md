@@ -264,3 +264,53 @@ partial findings. Use `RUN_MAX_OUTPUT_TOKENS=2048` for structured research outpu
 Ask and historical runs retain their existing execution route. Disable the flag
 to stop routing new runs through the graph; stored results remain readable.
 This workflow stays opt-in pending the real-model coverage/support evaluation.
+
+Enable `ADAPTIVE_FLASHCARDS_ENABLED=true` to review saved flashcard artifacts
+with a private FSRS schedule. Flip a due card, then rate Again/Hard/Good/Easy
+(Quên/Khó/Nhớ/Dễ). Due times use UTC. Existing decks receive stable projected
+card IDs without changing their shared body; every user has independent state.
+Disable the flag to keep the original flashcard reader while retaining progress.
+`INTERACTIVE_CONCEPT_MAP_ENABLED=true` renders saved mind maps as accessible SVG
+concept graphs. Focus a node and press Enter/Space; choose its source page when
+multiple citations are available. Missing or revoked sources use the existing
+artifact/reader access errors. The legacy list remains available with the flag off.
+
+For a reasoning-capable compatible chat provider, optionally set
+`MODEL_CHAT_REASONING_EFFORT` to a value supported by that model (for example
+`low` or `none`). Omit it for providers that do not support the parameter. A
+completion can otherwise consume its whole output budget on reasoning and
+return no answer text. Gateway diagnostics record only finish/token metadata,
+never reasoning or answer contents. See the
+[provider parameter](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+
+Set `AGENTIC_DISCOVERY_ENABLED=true` for an editable Crossref query after missing
+internal evidence. The provider is called only after **Approve Crossref search**;
+**Save reference** is separate. Import/index full text before citing it.
+`AGENTIC_WRITING_ENABLED=true` enables verified drafts for Agent or accepted Plan
+Write → Draft. Review the cited preview before saving an artifact.
+`AGENTIC_DEFENSE_ENABLED=true` adds Ask → Research → Mock defense. Select the draft
+document, inspect the targeted passage and counter-evidence, and answer the
+reviewer's question in the private conversation. Criticism does not become a
+shared cited artifact.
+
+`make verify-formulas` generates a synthetic text-layer STEM PDF and an
+extraction report under `test-results/formula-extraction/`. It measures symbols,
+indices, units and coordinate retention. The initial corpus is explicitly
+unreviewed; a passing smoke result alone does not enable Formula Inspector.
+Variable explanations, numeric examples and charts stay gated until reviewed,
+representative cases pass. OCR remains separate.
+
+`make verify-agentic-research` runs an isolated real-model synthetic corpus with
+a dense Paper A, dataset available only in Paper B, different time units,
+conflicting Gamma results under the same protocol and an unanswerable GPU-memory question. It also
+checks verified drafts, private mock defense, generated FSRS cards and concept
+graphs. The preserved six-chunk Ask path runs on the same corpus as a baseline.
+Per-paper matrix coverage, correlated completion/embedding/search calls and
+p50/p95 timings are saved with an independent model support score under
+`test-results/rag-local-test-*/`. The small synthetic sample is a release gate
+input, not a production latency estimate or a substitute for human evaluation.
+
+For compatible chat providers that support JSON object response mode, set
+`MODEL_CHAT_RESPONSE_FORMAT=json_object`. It is omitted by default. This requests
+valid JSON; backend schema, citation and source checks still apply. Unsupported
+providers should leave it empty. See the [response format API contract](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).

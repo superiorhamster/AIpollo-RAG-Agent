@@ -43,6 +43,8 @@ ARTIFACT_PATHS = (
     (re.compile(rf"workspaces/{UUID_PATH}/artifacts"), ("GET", "POST")),
     (re.compile(rf"workspaces/{UUID_PATH}/artifacts/{UUID_PATH}"), ("GET", "PATCH", "DELETE")),
     (re.compile(rf"workspaces/{UUID_PATH}/artifacts/{UUID_PATH}/export/(?:md|docx)"), ("GET",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/artifacts/{UUID_PATH}/cards"), ("GET",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/artifacts/{UUID_PATH}/cards/{UUID_PATH}/reviews"), ("POST",)),
 )
 WORKSPACE_PATHS = (
     (re.compile(rf"workspaces/{UUID_PATH}/references"), ("GET", "POST")),

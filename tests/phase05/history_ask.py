@@ -326,6 +326,26 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(run['status'], 'succeeded', run.get('error'))
                 self.assertEqual(run['result']['claims'][0]['citations'], [SCHEDULE])
 
+    async def test_schema_repair_includes_safe_error_paths_without_relaxing_validation(self):
+        def upstream(request):
+            if request.url.host == 'retrieval-service':return httpx.Response(200,json={'evidence':[SCHEDULE]})
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            worker=Worker(self.database,client)
+            run=self.new_run(Q1,new_thread=True)
+            broken=json.dumps({'claims':[{'text':'private-output-sentinel','source':'document','evidence':SCHEDULE['chunk_id']}]})
+            good=json.dumps({'claims':[claim('14:00.',SCHEDULE)]})
+            worker.complete=AsyncMock(side_effect=[broken,good])
+            with self.assertLogs('app.worker',level='WARNING') as captured:await worker.execute(run)
+            self.assertEqual(run['status'],'succeeded',run.get('error'))
+            repair=worker.complete.await_args_list[1].args[1]
+            self.assertIn('list_type',repair)
+            self.assertIn('evidence',repair)
+            self.assertNotIn('private-output-sentinel',repair)
+            self.assertNotIn('private-output-sentinel',' '.join(captured.output))
+            self.assertEqual(worker.complete.await_count,2)
+            self.assertEqual(run['result']['claims'][0]['citations'],[SCHEDULE])
+
     async def test_request_citation_mode_controls_prompt_and_retrieval_opt_in(self):
         identifier = str(uuid4())
         parent = SCHEDULE | {"citation_segments_v1": [

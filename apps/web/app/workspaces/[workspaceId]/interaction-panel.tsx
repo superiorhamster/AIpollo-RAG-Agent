@@ -7,6 +7,7 @@ import { useWorkspaceLanguage } from '../../components/workspace-language'
 import { api, errorMessage } from '../../lib/api'
 import type { DocumentItem } from './document-shelf'
 import { GeneratedContent } from './generated-content'
+import { SourceDiscovery } from './source-discovery'
 import type { CitationTarget } from './pdf-preview'
 
 type Mode = 'ASK' | 'PLAN' | 'AGENT'
@@ -28,6 +29,7 @@ const tasks: Record<Capability, Record<string, string>> = {
   },
   RESEARCH: {
     answer: 'Answer',
+    mock_defense: 'Mock defense',
     comparison: 'Compare papers',
     screening: 'Screen papers',
     extraction: 'Extract findings',
@@ -42,7 +44,7 @@ const tasks: Record<Capability, Record<string, string>> = {
     citation_review: 'Citation review',
   },
 }
-type Objective = { tutor_action?: 'guide' | 'hint' | 'solution'; query: string; document_ids: string[]; capability: Capability; task: string }
+type Objective = { draft_document_id?: string; tutor_action?: 'guide' | 'hint' | 'solution'; query: string; document_ids: string[]; capability: Capability; task: string }
 type PlanStep = { day?: number; citations?: Citation[]; step_id: string; tool: 'retrieve' | 'compose'; action: string; objective: Objective; expected_output: string }
 type Plan = {
   plan_id: string
@@ -61,7 +63,7 @@ const citationModeKey = 'aipollo.ask.citation-mode'
 
 type Citation = CitationTarget & { chunk_id: string; name: string }
 type MatrixCell = { document_id: string; criterion: string; status: 'supported' | 'contradicted' | 'insufficient'; finding: string; citations: Citation[] }
-type Result = { evidence_matrix?: MatrixCell[] | null; budget_exhausted?: string | null; tutor_question?: string | null; kind?: string; claims: {
+type Result = { defense_review?: { assessment: string; assumption: string; feedback: string; target_citations: Citation[]; counter_citations: Citation[] } | null; verified_draft?: boolean | null; evidence_matrix?: MatrixCell[] | null; budget_exhausted?: string | null; tutor_question?: string | null; kind?: string; claims: {
   text: string
   fields?: Record<string, string>
   citations: Citation[]
@@ -108,7 +110,7 @@ export function InteractionPanel({
   const [mode, setMode] = useState<Mode>('ASK')
   const [citationMode, setCitationMode] = useState<CitationMode>('segment')
   const [plan, setPlan] = useState<Plan>()
-  const [features, setFeatures] = useState({ custom_plan: false, socratic_tutor: false, curriculum: false, research: false })
+  const [features, setFeatures] = useState({ custom_plan: false, socratic_tutor: false, curriculum: false, research: false, discovery: false, mock_defense: false })
   const [curriculumDays, setCurriculumDays] = useState(0)
   const [selectedTask, setSelectedTask] = useState('answer')
   useEffect(() => {
@@ -327,6 +329,7 @@ export function InteractionPanel({
       document_ids,
       capability,
       task: String(form.get('task')),
+      ...(form.get('task') === 'mock_defense' ? { draft_document_id: String(form.get('draft_document_id')) } : {}),
     }
     if (input.query.length < 2 || !input.document_ids.length || input.document_ids.length > 100) {
       setError('Enter a question and choose between 1 and 100 sources.')
@@ -449,6 +452,14 @@ export function InteractionPanel({
             </li>)}
           </ol>
         </section>}
+        {item.result?.defense_review && <section className="run-card form-stack" aria-label={text('Mock defense review', 'Nhận xét phản biện')}>
+          <p><strong>{item.result.defense_review.assessment.replaceAll('_', ' ')}</strong></p>
+          <p>{text('Assumption to defend', 'Giả định cần bảo vệ')}: {item.result.defense_review.assumption}</p>
+          {!!item.result.defense_review.feedback && <p>{item.result.defense_review.feedback}</p>}
+          <div>{text('Passage under review', 'Đoạn đang được phản biện')}: {item.result.defense_review.target_citations.map(citation => <button type="button" className="citation-pill" key={citation.chunk_id} onClick={() => onCitation(citation)}>{citation.name}, page {citation.page}</button>)}</div>
+          {!!item.result.defense_review.counter_citations.length && <div>{text('Counter evidence', 'Bằng chứng đối chiếu')}: {item.result.defense_review.counter_citations.map(citation => <button type="button" className="citation-pill" key={citation.chunk_id} onClick={() => onCitation(citation)}>{citation.name}, page {citation.page}</button>)}</div>}
+        </section>}
+        {item.result?.verified_draft && !!item.result.claims.length && <p className="badge badge-success">{text('Draft evidence checked · review before saving', 'Đã kiểm tra bằng chứng · xem nháp trước khi lưu')}</p>}
         {item.result?.tutor_question && <p className="source-excerpt">{item.result.tutor_question}</p>}
         {item.result?.kind === 'socratic_tutor' && <div className="actions">
           {(['hint', 'solution'] as const).map(action => <button key={action} type="button" className="secondary sm" disabled={locked}
@@ -473,12 +484,14 @@ export function InteractionPanel({
         </div>}
         {retryErrors[original.run_id] && item.error_code && <p role="alert">{retryErrors[original.run_id]}</p>}
         {item.result?.budget_exhausted && <p role="status">{text('The run reached its budget. Verified findings are shown; incomplete cells are marked.', 'Đã hết ngân sách lượt chạy. Các kết quả đã kiểm tra được giữ lại; ô còn thiếu được đánh dấu.')}</p>}
+        {features.discovery && item.result && (item.result.insufficient_evidence || item.result.evidence_matrix?.some(cell => cell.status === 'insufficient')) &&
+          <SourceDiscovery key={item.run_id} base={base} query={item.query ?? ''} canSave={canPublish} />}
         {item.result?.evidence_matrix && <div className="table-scroll" tabIndex={0} role="region" aria-label={text('Evidence matrix', 'Ma trận bằng chứng')}>
           <table><caption>{text('Evidence by paper and criterion', 'Bằng chứng theo bài báo và tiêu chí')}</caption>
             <thead><tr><th>{text('Paper', 'Bài báo')}</th><th>{text('Criterion', 'Tiêu chí')}</th><th>{text('Finding', 'Kết quả')}</th><th>{text('Status and sources', 'Trạng thái và nguồn')}</th></tr></thead>
             <tbody>{item.result.evidence_matrix.map(cell => <tr key={cell.document_id + ':' + cell.criterion}>
               <th scope="row">{documents.find(doc => doc.document_id === cell.document_id)?.name ?? text('Unavailable source', 'Nguồn không còn khả dụng')}</th>
-              <td>{cell.criterion}</td><td>{cell.finding || text('Not enough evidence', 'Chưa đủ bằng chứng')}</td>
+              <td>{cell.criterion}</td><td>{cell.status === 'contradicted' && text('Refuted statement: ', 'Nhận định bị bác bỏ: ')}{cell.finding || text('Not enough evidence', 'Chưa đủ bằng chứng')}</td>
               <td>{cell.status}{cell.citations.map(citation => <button type="button" className="citation-pill" key={citation.chunk_id}
                 onClick={() => onCitation(citation)}>{citation.name}, page {citation.page}</button>)}</td>
             </tr>)}</tbody>
@@ -637,7 +650,7 @@ export function InteractionPanel({
                 </label>
                 <label>{text('Task', 'Tác vụ')}
                   <select value={step.objective.task} onChange={event => setWorkflowDraft(rows => rows?.map((row, i) => i === index ? { ...row, objective: { ...row.objective, task: event.target.value } } : row))}>
-                    {Object.entries(tasks[step.objective.capability]).filter(([value]) => value !== 'socratic_tutor').map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    {Object.entries(tasks[step.objective.capability]).filter(([value]) => !['socratic_tutor', 'mock_defense'].includes(value)).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                   </select>
                 </label>
                 <div role="group" aria-label={text('Sources for activity', 'Nguồn cho hoạt động') + ' ' + (index + 1)}>
@@ -728,10 +741,15 @@ export function InteractionPanel({
             <option value="LEARN">Learn</option><option value="RESEARCH">Research</option><option value="WRITE">Write</option>
           </select>
           <select aria-label="Output" name="task" disabled={locked}
-            value={selectedTask === 'socratic_tutor' && effectiveMode !== 'ASK' ? 'answer' : selectedTask}
+            value={['socratic_tutor', 'mock_defense'].includes(selectedTask) && effectiveMode !== 'ASK' ? 'answer' : selectedTask}
             onChange={event => setSelectedTask(event.currentTarget.value)}>
-            {Object.entries(tasks[capability]).filter(([value]) => value !== 'socratic_tutor' || (features.socratic_tutor && effectiveMode === 'ASK')).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            {Object.entries(tasks[capability]).filter(([value]) => (value !== 'socratic_tutor' || (features.socratic_tutor && effectiveMode === 'ASK')) && (value !== 'mock_defense' || (features.mock_defense && effectiveMode === 'ASK'))).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
+          {selectedTask === 'mock_defense' && effectiveMode === 'ASK' && <label>{text('Draft to review', 'Bản nháp cần phản biện')}
+            <select name="draft_document_id" aria-label={text('Draft to review', 'Bản nháp cần phản biện')} required disabled={locked}>
+              {selectedSources.map(id => <option value={id} key={id}>{documents.find(doc => doc.document_id === id)?.name ?? id}</option>)}
+            </select>
+          </label>}
           <details className="composer-mobile-sources">
             <summary>{text('Choose sources', 'Chọn nguồn')}</summary>
             {documents.map(doc => <label className="check-option" key={doc.document_id}>

@@ -1,6 +1,7 @@
 """Bounded per-paper research with durable LangGraph node snapshots."""
 import asyncio
 import json
+import hashlib
 from typing import Literal, TypedDict
 from uuid import UUID
 
@@ -47,12 +48,23 @@ class Verification(BaseModel, extra="forbid"):
     claims: list[Verdict] = Field(max_length=12)
 
 
+class CellVerdict(BaseModel, extra="forbid"):
+    index: int = Field(ge=0, le=19)
+    status: Literal["supported", "contradicted", "insufficient"]
+
+
+class CellVerification(BaseModel, extra="forbid"):
+    cells: list[CellVerdict] = Field(max_length=20)
+
+
 class State(TypedDict, total=False):
     criteria: list[dict]
     evidence: dict[str, list[dict]]
     initial_calls: list[str]
     gap_calls: int
     cells: list[dict]
+    proposed_cells: list[dict]
+    cell_checks: dict[str, str]
     answer: dict
     verified: bool
 
@@ -86,12 +98,13 @@ class ResearchGraph:
         self.state: State = {}
         self.initial_evidence = initial_evidence
         graph = StateGraph(State)
-        for name in ("decompose", "retrieve", "grade", "fill_gap", "synthesize", "verify"):
+        for name in ("decompose", "retrieve", "grade", "verify_cells", "fill_gap", "synthesize", "verify"):
             graph.add_node(name, self.record(getattr(self, name)))
         graph.add_edge(START, "decompose")
         graph.add_edge("decompose", "retrieve")
         graph.add_edge("retrieve", "grade")
-        graph.add_conditional_edges("grade", self.next_node, {"fill_gap": "fill_gap", "synthesize": "synthesize"})
+        graph.add_edge("grade", "verify_cells")
+        graph.add_conditional_edges("verify_cells", self.next_node, {"fill_gap": "fill_gap", "synthesize": "synthesize"})
         graph.add_edge("fill_gap", "grade")
         graph.add_edge("synthesize", "verify")
         graph.add_edge("verify", END)
@@ -126,13 +139,13 @@ class ResearchGraph:
             """), {"run": self.run["run_id"], "scope": self.scope, "state": json.dumps(self.state, ensure_ascii=False)})
             await connection.execute(text("UPDATE orchestration.runs SET updated_at=now() WHERE run_id=:run"), {"run": self.run["run_id"]})
 
-    async def model(self, instructions, payload, schema, validate=None):
+    async def model(self, instructions, payload, schema, validate=None, *, tokens=None):
         content = json.dumps(payload, ensure_ascii=False)
         if len((POLICY + instructions + content).encode()) + 150 > self.worker.max_input_bytes:
             raise StopRun("context_limit")
         for attempt in range(2):
             await self.current()
-            output = await self.worker.complete(self.run, POLICY + instructions + (" Correct the schema and supplied IDs." if attempt else ""), content, self.worker.max_tokens)
+            output = await self.worker.complete(self.run, POLICY + instructions + (" Correct the schema and supplied IDs." if attempt else ""), content, tokens or self.worker.max_tokens)
             try:
                 parsed = schema.model_validate_json(json_output(output))
                 return validate(parsed) if validate else parsed
@@ -145,23 +158,22 @@ class ResearchGraph:
             return {}
         parsed = await self.model("Decompose the research objective into 1–4 named comparison criteria. "
             'Schema: {"criteria":[{"name":string,"query":string}]}. Use explicit queries for methods, datasets, metrics or limitations when requested.',
-            {"objective": self.objective.query}, Decomposition)
+            {"objective": self.objective.query}, Decomposition, tokens=min(self.worker.max_tokens, 800))
         if len({item.name for item in parsed.criteria}) != len(parsed.criteria):
             raise StopRun("invalid_model_output")
         return {"criteria": [item.model_dump() for item in parsed.criteria], "evidence": state.get("evidence", {}), "initial_calls": state.get("initial_calls", []), "gap_calls": 0}
 
     async def retrieve(self, state):
         for document in self.documents:
-            if document in state.get("initial_calls", []):
+            if document in state.get("initial_calls", []) and document in state.get("evidence", {}):
                 continue
             await self.current()
-            state["initial_calls"] = [*state.get("initial_calls", []), document]
-            self.state = state
-            await self.save()  # Reserve the search before calling; a crash cannot exceed the tool-call bound.
+            # The run row reserves tool budget before I/O; only completed reads belong in the checkpoint.
             query = (self.objective.query + ' ' + ' '.join(item["query"] for item in state["criteria"]))[:1800]
             objective = self.objective.model_copy(update={"query": query, "document_ids": [UUID(document)]})
             evidence = await self.worker.retrieve(self.run, objective)
             state["evidence"] = {**state.get("evidence", {}), document: evidence}
+            state["initial_calls"] = list(dict.fromkeys([*state.get("initial_calls", []), document]))
             self.state = state
             await self.save()
         return state
@@ -175,7 +187,7 @@ class ResearchGraph:
         cells = {(document, criterion["name"]): {"document_id": document, "criterion": criterion["name"],
             "status": "insufficient", "finding": "", "evidence": []} for document in self.documents for criterion in state["criteria"]}
         if not context:
-            return {"cells": list(cells.values())}
+            return {"proposed_cells": list(cells.values())}
         def validate(result):
             seen = set()
             for cell in result.cells:
@@ -197,7 +209,63 @@ class ResearchGraph:
             'Schema: {"cells":[{"document_id":UUID,"criterion":string,"status":"supported"|"contradicted"|"insufficient",'
             '"finding":string,"evidence":[passage UUID]}]}.',
             {"objective": self.objective.query, "criteria": state["criteria"], "papers": self.documents, "passages": context}, Grading, validate)
-        return {"cells": result}
+        return {"proposed_cells": result}
+
+    async def verify_cells(self, state):
+        context, supplied = self.context(state)
+        passages = {part["id"]: part for part in context}
+        proposed = state["proposed_cells"]
+        confirmed = {(cell["document_id"], cell["criterion"]): cell for cell in state.get("cells", [])}
+        checks = dict(state.get("cell_checks", {}))
+        pending = []
+        def key(cell):
+            return cell["document_id"], cell["criterion"]
+        def resolved(cell, status):
+            return {**cell, "status": status, **({"finding": "", "evidence": []} if status == "insufficient" else {})}
+        for index, cell in enumerate(proposed):
+            digest = hashlib.sha256(json.dumps(cell, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            if cell["status"] == "insufficient":
+                confirmed[key(cell)] = cell
+            elif digest in checks:
+                confirmed[key(cell)] = resolved(cell, checks[digest])
+            else:
+                pending.append((index, cell, digest))
+        instructions = ('Semantically check each matrix cell against its cited passages. A valid UUID is not evidence of support. '
+            'Check attribution, numeric values and units. Classify supported when the cited passages entail the finding, '
+            'contradicted when they refute it, otherwise insufficient. Do not add facts. '
+            'Schema: {"cells":[{"index":integer,"status":"supported"|"contradicted"|"insufficient"}]}.')
+        while pending:
+            batch, ids = [], set()
+            for row in pending:
+                index, cell, digest = row
+                candidate_ids = ids | set(cell["evidence"])
+                payload = {"cells": [{"index":i,"finding":c["finding"],"evidence":c["evidence"]} for i,c,_ in [*batch,row]],
+                           "passages": [passages[identifier] for identifier in sorted(candidate_ids)]}
+                if len((POLICY + instructions + json.dumps(payload, ensure_ascii=False)).encode()) + 200 > self.worker.max_input_bytes:
+                    break
+                batch.append(row)
+                ids = candidate_ids
+            if not batch:
+                _, cell, digest = pending.pop(0)
+                checks[digest] = "insufficient"
+                confirmed[key(cell)] = resolved(cell, "insufficient")
+            else:
+                payload = {"cells": [{"index":i,"finding":c["finding"],"evidence":c["evidence"]} for i,c,_ in batch],
+                           "passages": [passages[identifier] for identifier in sorted(ids)]}
+                expected = {index for index,_,_ in batch}
+                def validate(parsed):
+                    if len({row.index for row in parsed.cells}) != len(parsed.cells) or any(row.index not in expected for row in parsed.cells):
+                        raise ValueError("Invalid matrix verdict index")
+                    return {row.index:row.status for row in parsed.cells}
+                verdicts = await self.model(instructions, payload, CellVerification, validate, tokens=min(self.worker.max_tokens, 512))
+                for index, cell, digest in batch:
+                    status = verdicts.get(index, "insufficient")
+                    checks[digest] = status
+                    confirmed[key(cell)] = resolved(cell, status)
+                pending = pending[len(batch):]
+            self.state = {**state, "cells": list(confirmed.values()), "cell_checks": checks}
+            await self.save()
+        return {"cells": list(confirmed.values()), "cell_checks": checks}
 
     def next_node(self, state):
         if state.get("gap_calls", 0) < 2 and any(cell["status"] == "insufficient" for cell in state["cells"]):
@@ -211,14 +279,11 @@ class ResearchGraph:
         # Rotate across gaps rather than repeating the first missing cell indefinitely.
         cell = missing[state.get("gap_calls", 0) % len(missing)]
         criterion = next(item for item in state["criteria"] if item["name"] == cell["criterion"])
-        state["gap_calls"] = state.get("gap_calls", 0) + 1
-        self.state = state
-        await self.save()
         objective = self.objective.model_copy(update={"query": criterion["query"], "document_ids": [UUID(cell["document_id"])]})
         added = await self.worker.retrieve(self.run, objective, research_gap=True)
         previous = state["evidence"].get(cell["document_id"], [])
         merged = {item["chunk_id"]: item for item in [*previous, *added]}
-        return {"gap_calls": state["gap_calls"], "evidence": {**state["evidence"], cell["document_id"]: list(merged.values())}}
+        return {"gap_calls": state.get("gap_calls", 0) + 1, "evidence": {**state["evidence"], cell["document_id"]: list(merged.values())}}
 
     async def synthesize(self, state, repair=False):
         if state.get("verified") or (state.get("answer") and not repair):
@@ -235,7 +300,7 @@ class ResearchGraph:
                 claims.append({"text": claim.text, "fields": {}, "citations": [supplied[identifier] for identifier in dict.fromkeys(ids)]})
             return {"kind": self.objective.task, "claims": claims, "insufficient_evidence": not claims}
         answer = await self.model('Synthesize only verified matrix findings as one claim per entry with passage UUIDs. '
-            'Never combine incompatible units or hide contradictions. '
+            'Never combine incompatible units or hide contradictions. Contradicted cells contain refuted statements; never assert those statements as facts. '
             'Schema: {"claims":[{"text":string,"evidence":[passage UUID]}]}. ' +
             ('Rewrite or remove the previously unsupported claims; do not repeat them as facts.' if repair else ''),
             {"objective": self.objective.query, "matrix": state["cells"], "passages": context}, GeneratedAnswer, validate)
@@ -258,7 +323,7 @@ class ResearchGraph:
             supported = await self.model('Verify each claim semantically against its cited passages. A valid UUID is not proof. '
                 'Check numbers, units and attribution. Supported means the passages entail the statement; contradicted means '
                 'they refute it; otherwise insufficient. Schema: {"claims":[{"index":integer,"status":"supported"|"contradicted"|"insufficient"}]}.',
-                {"claims": payload}, Verification, validate)
+                {"claims": payload}, Verification, validate, tokens=min(self.worker.max_tokens, 512))
             filtered = [claim for index, claim in enumerate(answer["claims"]) if index in supported]
             if len(filtered) == len(answer["claims"]) or attempt:
                 return {"answer": {**answer, "claims": filtered, "insufficient_evidence": not filtered}, "verified": True}
@@ -282,8 +347,8 @@ class ResearchGraph:
         return {**(answer or {"kind": self.objective.task, "claims": [], "insufficient_evidence": True}),
                 "evidence_matrix": matrix, "budget_exhausted": exhausted}
 
-    async def execute(self):
-        if not 2 <= len(self.documents) <= 5:
+    async def execute(self, *, require_comparison=True):
+        if require_comparison and not 2 <= len(self.documents) <= 5:
             raise StopRun("research_source_limit")
         async with self.worker.database.connect() as connection:
             saved = await connection.scalar(text("SELECT state FROM orchestration.research_progress WHERE run_id=:run AND scope=:scope"),

@@ -11,14 +11,17 @@ from uuid import UUID, uuid4
 
 import httpx
 from docx import Document
-from fastapi import Depends, FastAPI, Request, Response
-from pydantic import BaseModel, StringConstraints
+from fastapi import Depends, FastAPI, Header, Request, Response
+from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 from starlette.concurrency import run_in_threadpool
 
 from rag_db import database_ready, install_database_errors, open_database
 from rag_http import ACCESS_COOKIE, ACCESS_FORMAT, ApiError, health_response, install_http, request_id, unauthorized, unavailable
+
+from .learning import concept_map
+from .reviews import DeckView, ReviewResult, deck, review
 
 SERVICE = "artifact-service"
 BASE = "/v1/workspaces/{workspace_id}/artifacts"
@@ -62,7 +65,7 @@ async def health():
 
 @app.get("/readyz")
 async def ready():
-    return health_response(SERVICE, await database_ready(app.state.database, "artifacts", "artifacts_001"))
+    return health_response(SERVICE, await database_ready(app.state.database, "artifacts", "artifacts_002"))
 
 
 def missing():
@@ -183,9 +186,41 @@ async def detail(workspace_id: UUID, artifact_id: UUID, actor: Actor, request: R
     async with app.state.database.connect() as connection:
         item = await get_item(connection, workspace_id, artifact_id)
     await visible_sources(workspace_id, item["source_ids"], request)
-    return {**dict(item), "can_manage": actor.role == "OWNER" or (
+    return {**dict(item),
+        "concept_map": concept_map(item) if item['kind']=='mind_map' and os.environ.get('INTERACTIVE_CONCEPT_MAP_ENABLED')=='true' else None,
+        "spaced_repetition": os.environ.get('ADAPTIVE_FLASHCARDS_ENABLED')=='true',
+        "can_manage": actor.role == "OWNER" or (
         actor.role == "EDITOR" and actor.user_id == item["user_id"]
     )}
+
+
+class ReviewCard(BaseModel, extra="forbid"):
+    rating: int = Field(ge=1, le=4, strict=True)
+    expected_version: int = Field(ge=0, strict=True)
+
+
+async def reviewable_item(workspace_id, artifact_id, request):
+    if os.environ.get('ADAPTIVE_FLASHCARDS_ENABLED')!='true':
+        raise ApiError(409, 'feature_disabled', 'Adaptive flashcards are not enabled.')
+    async with app.state.database.connect() as connection:
+        item = await get_item(connection, workspace_id, artifact_id)
+    if item['kind']!='flashcards':
+        raise ApiError(409, 'not_flashcards', 'Choose a flashcard artifact.')
+    await visible_sources(workspace_id, item['source_ids'], request)
+    return item
+
+
+@app.get(BASE + '/{artifact_id}/cards', response_model=DeckView)
+async def due_cards(workspace_id: UUID, artifact_id: UUID, actor: Actor, request: Request, due_only: bool = False):
+    item = await reviewable_item(workspace_id, artifact_id, request)
+    return await deck(app.state.database, item, actor.user_id, due_only)
+
+
+@app.post(BASE + '/{artifact_id}/cards/{card_id}/reviews', response_model=ReviewResult)
+async def review_card(workspace_id: UUID, artifact_id: UUID, card_id: UUID, data: ReviewCard,
+                      actor: Actor, request: Request, key: Annotated[UUID, Header(alias='Idempotency-Key')]):
+    item = await reviewable_item(workspace_id, artifact_id, request)
+    return await review(app.state.database, item, actor.user_id, card_id, data.rating, data.expected_version, key)
 
 
 @app.patch(BASE + "/{artifact_id}")

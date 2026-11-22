@@ -3,13 +3,15 @@
 import { DesignIcon } from '../../components/aipollo'
 import type { CitationTarget } from './pdf-preview'
 import { GeneratedContent } from './generated-content'
+import { StudyDeck } from './study-deck'
+import { ConceptMap, type ConceptGraph } from './concept-map'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Bookmark, Download, Trash2, Edit3, ExternalLink, FileText, RefreshCw, AlertCircle, Search } from 'lucide-react'
 import { api, errorMessage, type Workspace } from '../../lib/api'
 
 type Citation = CitationTarget & { chunk_id: string; name: string }
 type Artifact = { artifact_id: string; name: string; kind: string }
-type ArtifactDetail = Artifact & { can_manage: boolean; body: { claims: { text: string; fields?: Record<string, string>; citations: Citation[] }[] } }
+type ArtifactDetail = Artifact & { spaced_repetition?: boolean; concept_map?: ConceptGraph | null; can_manage: boolean; body: { claims: { text: string; fields?: Record<string, string>; citations: Citation[] }[] } }
 type Reference = { doi: string; title: string; authors: string[]; publication_year: number | null; tags: string[] }
 
 const artifactTypes = {
@@ -183,7 +185,11 @@ export function AcademicLibrary({ workspace, view, onCitation, openedArtifact }:
         </details>
         {opened && (
           <article className="form-stack">
-            {opened.kind === 'evidence_table' ? <>
+            {opened.kind === 'flashcards' && opened.spaced_repetition
+              ? <StudyDeck key={opened.artifact_id} base={base} artifactId={opened.artifact_id} onCitation={cite} />
+              : opened.kind === 'mind_map' && opened.concept_map
+              ? <ConceptMap key={opened.artifact_id} graph={opened.concept_map} onCitation={cite} />
+              : opened.kind === 'evidence_table' ? <>
               <div className="aipollo-table-scroll"><table className="aipollo-table evidence-table">
                 <thead><tr>{Object.values(evidenceColumns).map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
                 <tbody>{opened.body.claims.map((row, index) => (

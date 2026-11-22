@@ -30,8 +30,8 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
                 'max_searches': max(row['searches'] for row in cls.measurements),
             }))
     async def asyncSetUp(self):
-        self.env = {name: os.environ.get(name) for name in ['AGENTIC_RESEARCH_ENABLED', 'AGENTIC_WORKFLOW_ENABLED', 'RESEARCH_MAX_MODEL_CALLS']}
-        os.environ.update(AGENTIC_RESEARCH_ENABLED='true', AGENTIC_WORKFLOW_ENABLED='true', RESEARCH_MAX_MODEL_CALLS='12')
+        self.env = {name: os.environ.get(name) for name in ['AGENTIC_RESEARCH_ENABLED', 'AGENTIC_WORKFLOW_ENABLED', 'RESEARCH_MAX_MODEL_CALLS', 'AGENTIC_WRITING_ENABLED', 'AGENTIC_DEFENSE_ENABLED']}
+        os.environ.update(AGENTIC_RESEARCH_ENABLED='true', AGENTIC_WORKFLOW_ENABLED='true', RESEARCH_MAX_MODEL_CALLS='12', AGENTIC_WRITING_ENABLED='true', AGENTIC_DEFENSE_ENABLED='true')
         self.database = open_database()
         app.state.database = self.database
         self.workspace, self.user, self.a, self.b, self.ca, self.cb, self.cd = [uuid4() for _ in range(7)]
@@ -48,6 +48,10 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.no_evidence = False
         self.cross_scope = False
         self.conflicting = False
+        self.defense_status = 'missing_citation'
+        self.invalid_counter = False
+        self.false_contradiction = False
+        self.false_matrix_finding = False
 
     async def asyncTearDown(self):
         async with self.database.begin() as c:
@@ -78,7 +82,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             doc = body['document_ids'][0]
             self.searches.append(doc)
             if self.no_evidence: items = []
-            elif doc == str(self.a): items = [self.evidence(self.a, self.ca, 'Method A uses a transformer. Time is 3 seconds.')]
+            elif doc == str(self.a): items = [self.evidence(self.a, self.ca, 'The draft claims all methods must use transformers.' if self.defense_status=='contradicted' and not self.false_contradiction else 'Method A uses a transformer. Time is 3 seconds.')]
             else:
                 items = [self.evidence(self.b, self.cb, 'Method B uses recurrence. Time is 9 seconds.' if self.conflicting else 'Method B uses recurrence. Time is 2000 milliseconds.')]
                 if self.searches.count(doc) > 1: items.append(self.evidence(self.b, self.cd, 'Dataset B uses Vietnamese benchmark V2.'))
@@ -87,7 +91,13 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         system = body['messages'][0]['content']
         payload = json.loads(body['messages'][1]['content'])
         self.models.append(system.split('Schema:')[0][-100:])
-        if 'Compare one dimension per entry' in system:
+        if 'Check whether the counter passages' in system:
+            output = {'contradicted': not self.false_contradiction}
+        elif 'Act as an academic reviewer' in system:
+            output = dict(question='Giả định này được bảo vệ bằng bằng chứng nào?', assessment=self.defense_status,
+                assumption='The inspected draft assumes the method generalizes.', feedback='Check the inspected claim.',
+                target_evidence=[str(self.ca)], counter_evidence=[str(uuid4()) if self.invalid_counter else str(self.cb)] if self.defense_status=='contradicted' else [])
+        elif 'Compare one dimension per entry' in system:
             output = dict(claims=[dict(text='Paper A uses a transformer.', evidence=[str(self.ca)])])
         elif 'Decompose' in system:
             output = dict(criteria=[dict(name='Method',query='What method is used?'),dict(name='Dataset',query='Which dataset is used?')])
@@ -100,9 +110,14 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
                 parts = [p for p in payload['passages'] if p['document_id'] == str(doc)]
                 for criterion in ['Method', 'Dataset']:
                     found = next((p for p in parts if criterion in p['text']), None)
+                    finding = 'Paper A reports 99 seconds.' if self.false_matrix_finding and doc==self.a and criterion=='Method' else found['text'] if found else ''
                     cells.append(dict(document_id=str(doc), criterion=criterion, status='supported' if found else 'insufficient',
-                                      finding=found['text'] if found else '', evidence=[found['id']] if found else []))
+                                      finding=finding, evidence=[found['id']] if found else []))
             output = dict(cells=cells)
+        elif 'Draft a cited paragraph' in system:
+            output = dict(claims=[dict(text='Paper A reports 99 seconds.' if self.inject_unsupported and 'Rewrite or remove' not in system else 'Paper A uses a transformer.', evidence=[str(self.ca)])])
+        elif 'Semantically check each matrix cell' in system:
+            output = dict(cells=[dict(index=cell['index'],status='contradicted' if '99' in cell['finding'] else 'supported') for cell in payload['cells']])
         elif 'Synthesize only' in system:
             text = 'Paper A reports 99 seconds.' if self.inject_unsupported and 'Rewrite or remove' not in system else 'Paper A uses a transformer; Paper B uses recurrence.'
             output = dict(claims=[dict(text=text, evidence=[str(self.ca),str(self.cb)])])
@@ -178,6 +193,110 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('9 seconds' if conflicting else '2000 milliseconds', b['finding'])
             self.assertNotEqual(a['citations'][0]['document_id'], b['citations'][0]['document_id'])
 
+    async def test_verified_draft_repairs_unsupported_numbers_before_preview(self):
+        self.objective = {**self.objective, 'capability': 'WRITE', 'task': 'draft', 'document_ids': [str(self.a)]}
+        self.inject_unsupported = True
+        result = await self.run_research('PLAN')
+        self.assertEqual(result['status'], 'succeeded', result)
+        self.assertTrue(result['result']['verified_draft'])
+        self.assertNotIn('99', ' '.join(claim['text'] for claim in result['result']['claims']))
+        self.assertEqual(self.verifications, 2)
+        self.assertTrue(all(c['document_id'] == str(self.a) for claim in result['result']['claims'] for c in claim['citations']))
+
+    async def test_private_mock_defense_separates_target_and_counter_evidence(self):
+        conversation = None
+        for assessment in ['missing_citation', 'contradicted']:
+            self.defense_status = assessment
+            objective = {**self.objective, 'task': 'mock_defense', 'draft_document_id': str(self.a)}
+            started = await self.post('/runs', dict(mode='ASK',objective=objective,conversation_id=conversation))
+            self.assertEqual(started.status_code, 202, started.text)
+            async with httpx.AsyncClient(transport=httpx.MockTransport(self.upstream)) as client:
+                worker = Worker(self.database,client)
+                await worker.execute(await worker.claim())
+            result = (await self.api.get(self.base + '/runs/' + started.json()['run_id'])).json()
+            self.assertEqual(result['status'], 'succeeded', result)
+            conversation = result['conversation_id']
+            review = result['result']['defense_review']
+            self.assertEqual(review['assessment'], assessment)
+            self.assertEqual(review['target_citations'][0]['document_id'], str(self.a))
+            self.assertEqual([c['document_id'] for c in review['counter_citations']], [str(self.b)] if assessment=='contradicted' else [])
+            self.assertEqual(result['result']['claims'], [])
+            self.assertTrue(result['result']['tutor_question'])
+        app.dependency_overrides[actor] = lambda:uuid4()
+        self.assertEqual((await self.api.get(self.base + '/conversations/' + conversation)).status_code,404)
+
+    async def test_mock_defense_rejects_missing_draft_and_unscoped_counter(self):
+        objective = {**self.objective, 'task': 'mock_defense'}
+        self.assertEqual((await self.post('/runs',dict(mode='ASK',objective=objective))).status_code,422)
+        objective['draft_document_id'] = str(self.a)
+        self.assertEqual((await self.post('/runs',dict(mode='AGENT',objective=objective))).status_code,422)
+        self.defense_status,self.invalid_counter = 'contradicted',True
+        started = (await self.post('/runs',dict(mode='ASK',objective=objective))).json()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(self.upstream)) as client:
+            worker = Worker(self.database,client)
+            await worker.execute(await worker.claim())
+        result = (await self.api.get(self.base + '/runs/' + started['run_id'])).json()
+        self.assertEqual((result['status'],result['error_code']),('failed','invalid_model_output'))
+
+    async def test_defense_does_not_accept_valid_but_noncontradictory_counter_source(self):
+        self.defense_status, self.false_contradiction = 'contradicted', True
+        objective = {**self.objective, 'task': 'mock_defense', 'draft_document_id': str(self.a)}
+        run = (await self.post('/runs',dict(mode='ASK',objective=objective))).json()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(self.upstream)) as client:
+            worker = Worker(self.database,client)
+            await worker.execute(await worker.claim())
+        result = (await self.api.get(self.base + '/runs/' + run['run_id'])).json()
+        self.assertEqual((result['status'],result['error_code']),('failed','invalid_model_output'))
+
+    async def test_duplicate_source_ids_do_not_expand_the_run_search_budget(self):
+        objective = {**self.objective, 'document_ids': [str(self.a)]*10 + [str(self.b)]*10}
+        steps = [dict(step_id=str(uuid4()), tool='compose', action='Compare scoped papers', objective=objective,
+                      expected_output='Verified findings') for _ in range(2)]
+        plan = (await self.post('/plans', {**objective,'steps':steps})).json()
+        self.assertEqual((await self.post('/plans/' + plan['plan_id'] + '/accept', {'plan_version':1})).status_code,200)
+        run = (await self.post('/runs', dict(mode='PLAN',plan_id=plan['plan_id'],plan_version=1))).json()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(self.upstream)) as client:
+            worker = Worker(self.database,client)
+            await worker.execute(await worker.claim())
+        result = (await self.api.get(self.base + '/runs/' + run['run_id'])).json()
+        self.assertEqual(result['status'],'succeeded',result)
+        self.assertLessEqual(len(self.searches),4)
+        self.assertEqual(result['result']['budget_exhausted'],'generation_budget')
+
+    async def test_matrix_checker_refutes_a_false_finding_with_a_valid_source_id(self):
+        self.false_matrix_finding = True
+        result = await self.run_research()
+        self.assertEqual(result['status'],'succeeded',result)
+        cell = next(cell for cell in result['result']['evidence_matrix'] if cell['document_id']==str(self.a) and cell['criterion']=='Method')
+        self.assertEqual(cell['status'],'contradicted')
+        self.assertEqual(cell['citations'][0]['chunk_id'],str(self.ca))
+
+    async def test_restart_retries_an_unfinished_read_before_gap_searches(self):
+        run = (await self.post('/runs',dict(mode='AGENT',objective=self.objective))).json()
+        interrupted = False
+        def upstream(request):
+            nonlocal interrupted
+            if request.url.path.endswith('/search'):
+                doc = json.loads(request.content)['document_ids'][0]
+                if doc == str(self.b) and not interrupted:
+                    interrupted = True
+                    self.searches.append(doc)
+                    raise asyncio.CancelledError()
+            return self.upstream(request)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            worker = Worker(self.database,client)
+            first = await worker.claim()
+            with self.assertRaises((asyncio.CancelledError, NodeCancelledError)):
+                await worker.execute(first)
+            async with self.database.begin() as c:
+                await c.execute(text("UPDATE orchestration.runs SET lease_until=now()-interval '1 second' WHERE run_id=:id"), {'id':run['run_id']})
+            await worker.execute(await worker.claim())
+        result = (await self.api.get(self.base + '/runs/' + run['run_id'])).json()
+        self.assertEqual(result['status'],'succeeded',result)
+        self.assertEqual(self.searches[:3],[str(self.a),str(self.b),str(self.b)])
+        self.assertLessEqual(len(self.searches),4)
+        self.assertTrue(any(cell['document_id']==str(self.b) and cell['status']=='supported' for cell in result['result']['evidence_matrix']))
+
     async def test_context_reserves_each_paper_under_competition(self):
         dense = [self.evidence(self.a,uuid4(),'A'*6000) for _ in range(6)]
         sparse = [self.evidence(self.b,self.cb,'Only B reports Vietnamese dataset V2.')]
@@ -199,12 +318,16 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((result['status'],result['error_code']),('failed','invalid_evidence_scope'))
 
     async def test_budget_retains_matrix_and_ask_path_is_not_pinned(self):
-        os.environ['RESEARCH_MAX_MODEL_CALLS']='1'
-        result = await self.run_research()
-        self.assertEqual(result['status'],'succeeded',result)
-        self.assertEqual(result['result']['budget_exhausted'],'generation_budget')
-        self.assertTrue(result['result']['insufficient_evidence'])
-        self.assertTrue(all(cell['status']=='insufficient' for cell in result['result']['evidence_matrix']))
+        for limit in [1, 2, 3]:
+            os.environ['RESEARCH_MAX_MODEL_CALLS']=str(limit)
+            result = await self.run_research()
+            self.assertEqual(result['status'],'succeeded',result)
+            self.assertEqual(result['result']['budget_exhausted'],'generation_budget')
+            self.assertTrue(result['result']['insufficient_evidence'])
+            if limit < 3:
+                self.assertTrue(all(cell['status']=='insufficient' for cell in result['result']['evidence_matrix']))
+            else:
+                self.assertTrue(any(cell['status']=='supported' for cell in result['result']['evidence_matrix']))
         ask = (await self.post('/runs',dict(mode='ASK',objective=self.objective))).json()
         async with self.database.connect() as c:
             data = await c.scalar(text('SELECT input FROM orchestration.runs WHERE run_id=:id'),{'id':ask['run_id']})

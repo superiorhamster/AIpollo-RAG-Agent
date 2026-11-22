@@ -28,7 +28,7 @@ createServer(async (request, response) => {
     return response.end(request.method === 'HEAD' ? undefined : pdf)
   }
   if (path.endsWith('/events')) { response.writeHead(200, { 'Content-Type': 'text/event-stream' }); return response.end('data: ' + JSON.stringify(runView) + '\n\n') }
-  if (path.endsWith('/workflow-features')) return json({ custom_plan: true, socratic_tutor: true, curriculum: true, research: true })
+  if (path.endsWith('/workflow-features')) return json({ custom_plan: true, socratic_tutor: true, curriculum: true, research: true, discovery: true, mock_defense: true })
   if (path.endsWith('/auth/me')) return json(account)
   if (path.endsWith('/auth/register')) return json(account, 201)
   if (path.endsWith('/auth/login')) return json(account)

@@ -44,6 +44,10 @@ run_check() {
   agent-orchestrator python /tests/phase05/curriculum.py
 "${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \
   agent-orchestrator python /tests/phase05/research.py
+"${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \
+  artifact-service python /tests/phase06/learning.py
+"${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \
+  workspace-service python /tests/phase07/discovery.py
 
 "${compose[@]}" run --rm --no-deps -T retrieval-service python - < tests/phase03/segment_retrieval.py
 "${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \
