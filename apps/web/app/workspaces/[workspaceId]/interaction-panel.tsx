@@ -475,7 +475,11 @@ export function InteractionPanel({
         {item.status === 'cancelled' && <p role="status">Run cancelled.</p>}
         {(item.error_code || retryPending) && <div className="ask-run-error">
           <p role={retryPending ? 'status' : 'alert'}><DesignIcon name="error" /> {retryPending
-            ? 'Retrying…' : item.error_code === 'invalid_model_output' ? text('The model returned an invalid answer. Try again.', 'Mô hình trả lời sai định dạng hoặc trích dẫn. Hãy thử lại.') : `Run failed. ${item.error_code?.replaceAll('_', ' ')}.`}</p>
+            ? 'Retrying…' : item.error_code === 'invalid_model_output'
+              ? text('The model returned an invalid answer. Try again.', 'Mô hình trả lời sai định dạng hoặc trích dẫn. Hãy thử lại.')
+              : item.error_code === 'interaction_unavailable' && item.retryable
+                ? text('The AI provider is currently unavailable. You can retry this question.', 'Dịch vụ AI hiện không khả dụng. Bạn có thể thử lại câu hỏi này.')
+                : `Run failed. ${item.error_code?.replaceAll('_', ' ')}.`}</p>
           {(retryPending || (item.interaction === 'ASK' && item.retryable && item.objective && item.conversation_id)) &&
             <button type="button" className="secondary sm ask-retry" aria-label="Retry" title="Retry"
               aria-busy={retryPending} disabled={locked} onClick={() => void retry(original.run_id, item)}>

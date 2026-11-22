@@ -429,3 +429,29 @@ test('mock defense selects the draft and keeps criticism separate from sourced c
   await assistant.getByRole('button', { name: 'Send', exact: true }).click()
   await expect.poll(() => turns).toBe(2)
 })
+
+
+test('provider outages show localized guidance and preserve retry', async ({ page }) => {
+  const conversation = '88888888-8888-4888-8888-888888888888'
+  let failed: object = {}
+  await page.route(/\/runs$/, route => {
+    const body = route.request().postDataJSON()
+    failed = { run_id: '66666666-6666-4666-8666-666666666666', interaction: 'ASK',
+      conversation_id: conversation, status: 'failed', step: 'compose', plan_id: null, plan_version: null,
+      query: body.objective.query, objective: body.objective, error_code: 'interaction_unavailable', retryable: true, result: null }
+    return route.fulfill({ status: 202, json: failed })
+  })
+  await page.route(/\/runs\/[^/]+\/events$/, route => route.fulfill({ status: 200,
+    contentType: 'text/event-stream', body: 'data: ' + JSON.stringify(failed) + '\n\n' }))
+  const workspace = new WorkspacePage(page)
+  await workspace.open()
+  await page.getByRole('checkbox', { name: 'ready.pdf', exact: true }).check()
+  const assistant = page.getByRole('region', { name: 'Workspace assistant' })
+  await assistant.getByLabel('Question or objective').fill('Where is the demo?')
+  await assistant.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(assistant.getByRole('alert')).toContainText('The AI provider is currently unavailable.')
+  await expect(assistant.getByRole('button', { name: 'Retry', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: 'Tiếng Việt', exact: true }).click()
+  await expect(assistant.getByRole('alert')).toContainText('Dịch vụ AI hiện không khả dụng.')
+  await expect(assistant.getByRole('button', { name: 'Retry', exact: true })).toBeEnabled()
+})

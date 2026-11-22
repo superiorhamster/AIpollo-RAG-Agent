@@ -85,7 +85,7 @@ test('retries a gateway failure in the same Ask turn with the original sources',
   await expect.poll(() => submitted.length).toBe(2)
   await expect(assistant.getByRole('heading', { name: /Run queued/ })).toBeVisible()
   releaseSecond()
-  await expect(assistant.getByRole('alert')).toContainText('interaction unavailable')
+  await expect(assistant.getByRole('alert')).toContainText('The AI provider is currently unavailable.')
   await expect(retry).toBeEnabled()
   await retry.click()
   await expect(assistant.getByRole('button', { name: 'study.pdf, page 1' })).toBeVisible()
