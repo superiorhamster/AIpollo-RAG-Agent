@@ -255,6 +255,11 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
     headers = {"Authorization": "Bearer " + key, "X-Request-ID": request_id(request)}
     body = {"model": model, "max_tokens": data.max_tokens, "stream": False,
             "messages": [item.model_dump() for item in data.messages]}
+    response_format = os.environ.get("MODEL_CHAT_RESPONSE_FORMAT", "")
+    if response_format:
+        if response_format != "json_object":
+            raise ApiError(503, "chat_model_unavailable", "The configured response format is invalid.")
+        body["response_format"] = {"type": response_format}
     effort = os.environ.get("MODEL_CHAT_REASONING_EFFORT", "")
     if effort:
         if effort not in {"none", "minimal", "low", "medium", "high", "xhigh", "max"}:
@@ -272,7 +277,19 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
         response.raise_for_status()
         result = response.json()
         usage = result.get("usage") or {}
-        return CompletionOutput(text=result["choices"][0]["message"]["content"],
+        choice = result["choices"][0]
+        content = choice["message"]["content"]
+        if not isinstance(content, str) or not content.strip():
+            finish = choice.get("finish_reason")
+            finish = finish if isinstance(finish, str) and finish in {"stop", "length", "tool_calls", "content_filter", "function_call"} else "unknown"
+            output_tokens = usage.get("completion_tokens")
+            details = usage.get("completion_tokens_details")
+            reasoning_tokens = details.get("reasoning_tokens") if isinstance(details, dict) else None
+            LOG.warning("Chat completion missing text request_id=%s finish_reason=%s output_tokens=%s reasoning_tokens=%s",
+                        request_id(request), finish, output_tokens if isinstance(output_tokens, int) else None,
+                        reasoning_tokens if isinstance(reasoning_tokens, int) else None)
+            raise ValueError("Provider returned no text")
+        return CompletionOutput(text=content,
                                 input_tokens=usage.get("prompt_tokens"),
                                 output_tokens=usage.get("completion_tokens"))
     except (httpx.HTTPError, TimeoutError, ValueError, KeyError, IndexError, ValidationError) as exc:
