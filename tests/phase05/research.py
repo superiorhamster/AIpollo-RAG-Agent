@@ -297,6 +297,51 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(self.searches),4)
         self.assertTrue(any(cell['document_id']==str(self.b) and cell['status']=='supported' for cell in result['result']['evidence_matrix']))
 
+    async def test_matrix_repair_reports_only_owned_rule_and_schema(self):
+        original = self.upstream
+        attempts = []
+        def upstream(request):
+            response = original(request)
+            if request.url.path.endswith('/completions'):
+                system = json.loads(request.content)['messages'][0]['content']
+                if 'Evaluate each paper' in system:
+                    attempts.append(system)
+                    if len(attempts) == 1:
+                        output = json.loads(response.json()['text'])
+                        output['cells'][0]['criterion'] = 'private-criterion-fixture'
+                        return httpx.Response(200,json={'text':json.dumps(output)})
+            return response
+        self.upstream = upstream
+        with self.assertLogs('app.research',level='WARNING') as logs:
+            result = await self.run_research()
+        self.assertEqual(result['status'],'succeeded',result)
+        self.assertIn('Unknown or repeated matrix cell',attempts[1])
+        self.assertIn('JSON Schema:',attempts[1])
+        self.assertNotIn('private-criterion-fixture',attempts[1])
+        self.assertFalse(any('private-criterion-fixture' in line for line in logs.output))
+
+    async def test_gap_context_prioritizes_new_facts_and_skips_unchanged_reads(self):
+        original = self.upstream
+        dense = [self.evidence(self.b, self.cb if i == 0 else uuid4(), 'Method B uses recurrence.' if i == 0 else 'background ' * 180) for i in range(6)]
+        grading_calls = 0
+        def upstream(request):
+            nonlocal grading_calls
+            response = original(request)
+            if request.url.path.endswith('/completions') and 'Evaluate each paper' in json.loads(request.content)['messages'][0]['content']:
+                grading_calls += 1
+            if request.url.path.endswith('/search') and self.searches == [str(self.a),str(self.b)]:
+                return httpx.Response(200,json={'evidence':dense})
+            return response
+        self.upstream = upstream
+        result = await self.run_research()
+        self.assertEqual(result['status'],'succeeded',result)
+        self.assertEqual(self.searches,[str(self.a),str(self.b),str(self.a),str(self.b)])
+        dataset = next(cell for cell in result['result']['evidence_matrix'] if cell['document_id']==str(self.b) and cell['criterion']=='Dataset')
+        self.assertEqual(dataset['status'],'supported')
+        self.assertEqual(dataset['citations'][0]['chunk_id'],str(self.cd))
+        # Initial grading plus one grading of new evidence; the unchanged A read needs no model call.
+        self.assertEqual(grading_calls,2)
+
     async def test_context_reserves_each_paper_under_competition(self):
         dense = [self.evidence(self.a,uuid4(),'A'*6000) for _ in range(6)]
         sparse = [self.evidence(self.b,self.cb,'Only B reports Vietnamese dataset V2.')]

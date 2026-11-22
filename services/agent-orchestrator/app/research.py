@@ -2,11 +2,12 @@
 import asyncio
 import json
 import hashlib
+import logging
 from typing import Literal, TypedDict
 from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import text
 
 from .generation import json_output
@@ -62,6 +63,8 @@ class State(TypedDict, total=False):
     evidence: dict[str, list[dict]]
     initial_calls: list[str]
     gap_calls: int
+    gap_targets: list[str]
+    gap_has_new_evidence: bool
     cells: list[dict]
     proposed_cells: list[dict]
     cell_checks: dict[str, str]
@@ -105,7 +108,8 @@ class ResearchGraph:
         graph.add_edge("retrieve", "grade")
         graph.add_edge("grade", "verify_cells")
         graph.add_conditional_edges("verify_cells", self.next_node, {"fill_gap": "fill_gap", "synthesize": "synthesize"})
-        graph.add_edge("fill_gap", "grade")
+        graph.add_conditional_edges("fill_gap", lambda state: "grade" if state.get("gap_has_new_evidence", True) else self.next_node(state),
+                                    {"grade": "grade", "fill_gap": "fill_gap", "synthesize": "synthesize"})
         graph.add_edge("synthesize", "verify")
         graph.add_edge("verify", END)
         self.graph = graph.compile(name="bounded-paper-comparison-v1")
@@ -143,13 +147,30 @@ class ResearchGraph:
         content = json.dumps(payload, ensure_ascii=False)
         if len((POLICY + instructions + content).encode()) + 150 > self.worker.max_input_bytes:
             raise StopRun("context_limit")
+        repair = ""
         for attempt in range(2):
             await self.current()
-            output = await self.worker.complete(self.run, POLICY + instructions + (" Correct the schema and supplied IDs." if attempt else ""), content, tokens or self.worker.max_tokens)
+            system = POLICY + instructions + repair
+            output = await self.worker.complete(self.run, system, content, tokens or self.worker.max_tokens)
             try:
                 parsed = schema.model_validate_json(json_output(output))
                 return validate(parsed) if validate else parsed
-            except ValueError:
+            except ValueError as exc:
+                # Paths/types and these owned rule messages contain no model text.
+                known = {"criteria", "name", "query", "cells", "index", "status", "document_id",
+                         "criterion", "finding", "evidence", "claims", "text", "fields"}
+                issues = [{"type": item["type"], "path": [part if isinstance(part, int) or part in known else "?"
+                           for part in item["loc"]]} for item in exc.errors(include_input=False, include_url=False)[:4]] if isinstance(exc, ValidationError) else []
+                rules = {"Unknown or repeated matrix cell", "Evidence must be supplied and belong to this paper",
+                         "Verified findings need evidence", "Invalid matrix verdict index",
+                         "Citation outside supplied evidence", "Invalid claim index"}
+                rule = str(exc) if not isinstance(exc, ValidationError) and str(exc) in rules else None
+                logging.getLogger(__name__).warning(
+                    "Invalid research generation request_id=%s schema=%s attempt=%s validation=%s issues=%s rule=%s",
+                    self.run["request_id"], schema.__name__, attempt + 1, type(exc).__name__, json.dumps(issues), rule)
+                correction = " Correct the schema and supplied IDs. Return only a JSON object."
+                details = " Validation: " + json.dumps({"issues": issues, "rule": rule}) + " JSON Schema: " + json.dumps(schema.model_json_schema(), separators=(",", ":"))
+                repair = correction + details if len((POLICY + instructions + correction + details + content).encode()) <= self.worker.max_input_bytes else correction
                 if attempt:
                     raise StopRun("invalid_model_output")
 
@@ -267,23 +288,36 @@ class ResearchGraph:
             await self.save()
         return {"cells": list(confirmed.values()), "cell_checks": checks}
 
+    @staticmethod
+    def cell_key(cell):
+        return json.dumps([cell["document_id"], cell["criterion"]])
+
+    def missing_cells(self, state):
+        attempted = set(state.get("gap_targets", []))
+        return [cell for cell in state["cells"] if cell["status"] == "insufficient" and self.cell_key(cell) not in attempted]
+
     def next_node(self, state):
-        if state.get("gap_calls", 0) < 2 and any(cell["status"] == "insufficient" for cell in state["cells"]):
-            return "fill_gap"
-        return "synthesize"
+        return "fill_gap" if state.get("gap_calls", 0) < 2 and self.missing_cells(state) else "synthesize"
 
     async def fill_gap(self, state):
-        missing = [cell for cell in state["cells"] if cell["status"] == "insufficient"]
+        missing = self.missing_cells(state)
         if not missing:
-            return {}
-        # Rotate across gaps rather than repeating the first missing cell indefinitely.
-        cell = missing[state.get("gap_calls", 0) % len(missing)]
+            return {"gap_has_new_evidence": False}
+        cell = missing[0]
         criterion = next(item for item in state["criteria"] if item["name"] == cell["criterion"])
+        await self.current()
         objective = self.objective.model_copy(update={"query": criterion["query"], "document_ids": [UUID(cell["document_id"])]})
-        added = await self.worker.retrieve(self.run, objective, research_gap=True)
-        previous = state["evidence"].get(cell["document_id"], [])
-        merged = {item["chunk_id"]: item for item in [*previous, *added]}
-        return {"gap_calls": state.get("gap_calls", 0) + 1, "evidence": {**state["evidence"], cell["document_id"]: list(merged.values())}}
+        additions = await self.worker.retrieve(self.run, objective, research_gap=True)
+        # Gap results take priority inside this paper's quota; appending them can hide the missing fact.
+        merged = {}
+        for item in [*additions, *state["evidence"].get(cell["document_id"], [])]:
+            merged.setdefault(item["chunk_id"], item)
+        evidence = {**state["evidence"], cell["document_id"]: list(merged.values())}
+        before = {part["id"]: part["text"] for part in self.context(state)[0]}
+        after = {part["id"]: part["text"] for part in self.context({**state, "evidence": evidence})[0]}
+        return {"gap_calls": state.get("gap_calls", 0) + 1, "evidence": evidence,
+                "gap_targets": [*state.get("gap_targets", []), self.cell_key(cell)],
+                "gap_has_new_evidence": before != after}
 
     async def synthesize(self, state, repair=False):
         if state.get("verified") or (state.get("answer") and not repair):
@@ -300,6 +334,8 @@ class ResearchGraph:
                 claims.append({"text": claim.text, "fields": {}, "citations": [supplied[identifier] for identifier in dict.fromkeys(ids)]})
             return {"kind": self.objective.task, "claims": claims, "insufficient_evidence": not claims}
         answer = await self.model('Synthesize only verified matrix findings as one claim per entry with passage UUIDs. '
+            'Every claim must cite supporting passage UUIDs. Omit any claim without supporting evidence. '
+            'Missing information is already marked in the matrix: do not turn insufficient cells or abstentions into claims. '
             'Never combine incompatible units or hide contradictions. Contradicted cells contain refuted statements; never assert those statements as facts. '
             'Schema: {"claims":[{"text":string,"evidence":[passage UUID]}]}. ' +
             ('Rewrite or remove the previously unsupported claims; do not repeat them as facts.' if repair else ''),
