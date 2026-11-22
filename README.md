@@ -226,3 +226,18 @@ actions. Tutor questions stay in the private conversation history.
 Feature availability comes from the authenticated `workflow-features` endpoint.
 These flags default to false. Curriculum generation and the later Agentic RAG
 milestones are tracked in `harness/build/change-20261121-agentic-rag.md`.
+
+
+### Ask citation mode
+
+In the Ask composer, **Citation Mode** defaults to **Segment**. It uses adaptive
+sentence citations for the standard answer output where indexed sentence
+maps are available. Choose **Chunk** to use the legacy evidence prompt and PDF
+region. The selection is saved in the browser and applies to new Ask turns.
+Saved answers and artifacts keep their original citations. Retry reuses the
+failed turn's mode. Switching modes does not reindex any documents.
+
+See the [sentence citation guide](docs/ask-pipeline/sentence-citations.md) for the
+data flow, API and prompts, parser setup, verification commands and troubleshooting.
+The [implementation record](harness/build/change-20261122-sentence-citation-mvp.md)
+records observed model and browser results.

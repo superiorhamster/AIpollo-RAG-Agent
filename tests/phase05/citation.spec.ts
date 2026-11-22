@@ -74,6 +74,10 @@ test('retries a gateway failure in the same Ask turn with the original sources',
   await assistant.getByRole('button', { name: 'Send' }).click()
   const retry = assistant.getByRole('button', { name: 'Retry', exact: true })
   await expect(retry).toBeEnabled()
+  const citationMode = assistant.getByRole('combobox', { name: 'Citation Mode' })
+  expect(submitted[0].body.citation_mode).toBe('segment')
+  await citationMode.selectOption('chunk')
+  await expect(citationMode).toHaveValue('chunk')
   await workspace.source().uncheck()
   await retry.evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click() })
   await expect(retry).toBeDisabled()
@@ -87,10 +91,11 @@ test('retries a gateway failure in the same Ask turn with the original sources',
   await expect(assistant.getByRole('button', { name: 'study.pdf, page 1' })).toBeVisible()
   await expect(assistant.locator('.aipollo-turn')).toHaveCount(1)
   await expect(retry).toHaveCount(0)
-  expect(submitted.slice(1).map(item => item.body)).toEqual([
-    { ...submitted[0].body, conversation_id: conversation, retry_of_run_id: '1' },
-    { ...submitted[0].body, conversation_id: conversation, retry_of_run_id: '2' },
-  ])
+  // Retry inherits the stored mode server-side, even after the preference changes.
+  const objective = submitted[0].body.objective
+  expect(submitted.slice(1).map(item => item.body)).toEqual(['1', '2'].map(parent => ({
+    mode: 'ASK', objective, conversation_id: conversation, retry_of_run_id: parent,
+  })))
   expect(new Set(submitted.map(item => item.key)).size).toBe(3)
 })
 

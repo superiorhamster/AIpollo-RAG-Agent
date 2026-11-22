@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from rag_telemetry import propagate_trace
 from rag_http import ACCESS_COOKIE, ACCESS_FORMAT, ApiError, request_id, unauthorized, unavailable
-from rag_index import ActiveIndex, Chunk, EmbeddingConfig, EmbeddingResult, SourceSelection
+from rag_index import ActiveIndex, Chunk, EmbeddingConfig, EmbeddingResult, Segment, SourceSelection, segment_id
 
 document_list = TypeAdapter(list[ActiveIndex])
 WORD = re.compile(r"[^\W_]+", re.UNICODE)
@@ -25,7 +25,13 @@ class SearchRequest(SourceSelection):
     limit: int = Field(default=5, ge=1, le=10)
 
 
+class DelegatedSearchRequest(SearchRequest):
+    include_segments: bool = False
+
+
 class Evidence(Chunk):
+    citation_segments_v1: list[Segment] | None = None
+    generation: UUID | None = None
     document_id: UUID
     chunk_id: UUID
     name: str
@@ -35,6 +41,25 @@ class Evidence(Chunk):
 class SearchResult(BaseModel):
     evidence: list[Evidence]
     indexed_documents: list[UUID]
+
+
+def checked_segments(payload, chunk, parent):
+    try:
+        segments = TypeAdapter(list[Segment]).validate_python(payload)
+    except ValidationError:
+        return None
+    if not 0 < len(segments) <= 32:
+        return None
+    end = 0
+    for ordinal, segment in enumerate(segments):
+        if (segment.ordinal != ordinal or segment.id != segment_id(parent, ordinal)
+                or segment.page != chunk.page or not end <= segment.start < segment.end <= len(chunk.text)
+                or chunk.text[end:segment.start].strip() or not chunk.text[segment.start:segment.end].strip()
+                or (segment.precision == "page") != (not segment.rects)
+                or any(not (0 <= l < r <= 1 and 0 <= t < b <= 1) for l, t, r, b in segment.rects)):
+            return None
+        end = segment.end
+    return segments if not chunk.text[end:].strip() else None
 
 
 def words(value: str) -> set[str]:
@@ -135,7 +160,10 @@ async def candidates(
                 or payload.get("generation") != scope[document_id]):
             continue
         chunk = Chunk.model_validate(payload)
+        segments = (checked_segments(payload.get("citation_segments_v1"), chunk, UUID(point["id"]))
+                    if isinstance(data, DelegatedSearchRequest) and data.include_segments else None)
         evidence.append(Evidence(
+            citation_segments_v1=segments, generation=UUID(scope[document_id]) if segments else None,
             **chunk.model_dump(), document_id=document_id, chunk_id=point["id"],
             score=point["score"], name=names[document_id],
         ))

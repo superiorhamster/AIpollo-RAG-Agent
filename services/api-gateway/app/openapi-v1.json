@@ -6110,6 +6110,24 @@
       },
       "Citation": {
         "properties": {
+          "citation_id": {
+            "type": ["string", "null"],
+            "format": "uuid"
+          },
+          "segment_ids": {
+            "type": ["array", "null"],
+            "items": {"type": "string", "format": "uuid"},
+            "minItems": 1,
+            "maxItems": 6
+          },
+          "regions": {
+            "type": ["array", "null"],
+            "items": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+            "maxItems": 16
+          },
+          "precision": {
+            "enum": ["line", "coarse", "page", null]
+          },
           "page": {
             "type": "integer",
             "maximum": 300.0,
@@ -6653,6 +6671,10 @@
       },
       "StartRun": {
         "properties": {
+          "citation_mode": {
+            "enum": ["segment", "chunk", null],
+            "description": "Optional for Ask. Segment uses adaptive sentence citations and chunk uses legacy citations. Omission preserves the server default. Retry preserves the original mode."
+          },
           "mode": {
             "type": "string",
             "enum": [

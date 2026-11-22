@@ -96,8 +96,9 @@ Actor = Annotated[UUID, Depends(actor)]
 
 
 def digest(payload) -> str:
-    # Preserve existing idempotency hashes for requests predating retry parents.
-    exclude = {"retry_of_run_id"} if isinstance(payload, StartRun) and payload.retry_of_run_id is None else None
+    # Preserve hashes when optional controls are omitted by older clients.
+    exclude = ({name for name in ("retry_of_run_id", "citation_mode") if getattr(payload, name) is None}
+               if isinstance(payload, StartRun) else None)
     if isinstance(payload, PlanDefinition) and payload.steps is None:
         exclude = {"steps"}
     return hashlib.sha256(payload.model_dump_json(exclude=exclude).encode()).hexdigest()
@@ -276,13 +277,17 @@ async def retry_context(connection: AsyncConnection, data: StartRun, workspace_i
     if (data.objective != objective
             or (data.conversation_id is not None and data.conversation_id != original["conversation_id"])):
         raise ApiError(409, "retry_context_conflict", "Retry must preserve the original question and sources.")
+    citation_mode = original["input"].get("citation_mode")
+    if data.citation_mode is not None and data.citation_mode != citation_mode:
+        raise ApiError(409, "retry_context_conflict", "Retry must preserve the original citation mode.")
     history = original["history_snapshot"]
     if history is None:
         history = await prior_history(connection, original, input_limit())
         await connection.execute(text("""
             UPDATE orchestration.runs SET history_snapshot=CAST(:history AS jsonb) WHERE run_id=:id
         """), {"id": original["run_id"], "history": json.dumps(history, ensure_ascii=False)})
-    return {"objective": objective, "conversation": original["conversation_id"], "history": history}
+    return {"objective": objective, "conversation": original["conversation_id"], "history": history,
+            "citation_mode": citation_mode}
 
 
 @app.post(BASE + "/runs", status_code=202, response_model=RunView)
@@ -305,9 +310,11 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
             raise ApiError(409, "feature_disabled", "Socratic tutoring is not enabled.")
         conversation = data.conversation_id
         history = None
+        citation_mode = data.citation_mode
         if data.retry_of_run_id is not None:
             retry = await retry_context(connection, data, workspace_id, user_id)
             objective, conversation, history = retry["objective"], retry["conversation"], retry["history"]
+            citation_mode = retry["citation_mode"]
         if data.mode == "ASK":
             if conversation:
                 await owned_conversation(connection, scope(workspace_id, user_id, conversation))
@@ -317,6 +324,9 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
                     INSERT INTO orchestration.conversations (conversation_id, workspace_id, user_id)
                     VALUES (:conversation, :workspace, :user)
                 """), {**keys, "conversation": conversation})
+        run_input = objective.model_dump(mode="json")
+        if citation_mode is not None:
+            run_input["citation_mode"] = citation_mode
         result = await connection.execute(text(f"""
             INSERT INTO orchestration.runs (
                 run_id, workspace_id, user_id, interaction, input, conversation_id, plan_id, plan_version,
@@ -325,7 +335,7 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
                 :id, :workspace, :user, :mode, CAST(:input AS jsonb), :conversation, :plan, :version,
                 :request, :key, :hash, :retry, CAST(:history AS jsonb)
             ) RETURNING {RUN_FIELDS}
-        """), {**keys, "mode": data.mode, "input": objective.model_dump_json(), "conversation": conversation,
+        """), {**keys, "mode": data.mode, "input": json.dumps(run_input), "conversation": conversation,
                "plan": data.plan_id, "version": data.plan_version, "request": request_id(request),
                "key": key, "hash": digest(data), "retry": data.retry_of_run_id,
                "history": json.dumps(history, ensure_ascii=False) if history is not None else None})

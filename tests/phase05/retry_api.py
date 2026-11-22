@@ -65,6 +65,30 @@ class RetryApi(unittest.IsolatedAsyncioTestCase):
                                             {"id": run_id})
             return dict(rows.mappings().one())
 
+    async def test_citation_mode_validation_storage_and_retry_inheritance(self):
+        headers = {"Idempotency-Key": str(uuid4())}
+        first = {"mode": "ASK", "objective": self.objective, "citation_mode": "chunk"}
+        response = await self.client.post(self.route, headers=headers, json=first)
+        self.assertEqual(response.status_code, 202, response.text)
+        stored = await self.stored(response.json()["run_id"])
+        self.assertEqual(stored["input"]["citation_mode"], "chunk")
+        conflict = await self.client.post(self.route, headers=headers, json=first | {"citation_mode": "segment"})
+        self.assertEqual(conflict.status_code, 409)
+        for body in (first | {"citation_mode": "two"}, first | {"mode": "AGENT"}):
+            invalid = await self.client.post(self.route, headers={"Idempotency-Key": str(uuid4())}, json=body)
+            self.assertEqual(invalid.status_code, 422, invalid.text)
+
+        for mode, switched in (("segment", "chunk"), ("chunk", "segment")):
+            with self.subTest(mode=mode):
+                failed = await self.seed(objective=self.objective | {"citation_mode": mode})
+                retry = await self.retry(failed)
+                self.assertEqual(retry.status_code, 202, retry.text)
+                self.assertEqual((await self.stored(retry.json()["run_id"]))["input"]["citation_mode"], mode)
+                rejected = await self.retry(failed, body=first | {
+                    "citation_mode": switched, "retry_of_run_id": str(failed),
+                })
+                self.assertEqual(rejected.status_code, 409)
+
     async def test_later_turns_and_repeated_retries_preserve_snapshot(self):
         history = [{"question": "Nói về phòng B4-201.", "answer": "Phòng B4-201."}]
         original = await self.seed(snapshot=history)
@@ -228,7 +252,7 @@ class RetryApi(unittest.IsolatedAsyncioTestCase):
         saved = await self.stored(identifier)
         self.assertEqual(saved["status"], "succeeded", saved["error_code"])
         self.assertEqual(saved["history_snapshot"], [])
-        self.assertEqual(saved["result"]["claims"][0]["citations"], [citation])
+        self.assertEqual(saved["result"]["claims"][0]["citations"], [citation | {"segment_ids": None}])
         self.assertIsNone(run["history_snapshot"])
 
     async def test_tutor_question_and_chat_claims_stay_out_of_shared_artifact(self):
@@ -250,6 +274,21 @@ class RetryApi(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('tutor_question', body)
         self.assertEqual(body['claims'], [])
         self.assertTrue(body['insufficient_evidence'])
+
+    async def test_tutor_retry_retains_action_and_original_citation_mode(self):
+        objective = {**self.objective, 'capability': 'LEARN', 'task': 'socratic_tutor', 'tutor_action': 'hint'}
+        original = await self.seed(objective={**objective, 'citation_mode': 'segment'}, snapshot=[])
+        body = {'mode': 'ASK', 'objective': objective, 'conversation_id': str(self.conversation),
+                'retry_of_run_id': str(original)}
+        with patch.dict(os.environ, {'AGENTIC_TUTOR_ENABLED': 'true'}):
+            response = await self.retry(original, body=body)
+            self.assertEqual(response.status_code, 202, response.text)
+            saved = await self.stored(response.json()['run_id'])
+            self.assertEqual(saved['input']['citation_mode'], 'segment')
+            self.assertEqual(saved['input']['tutor_action'], 'hint')
+            self.assertEqual(saved['history_snapshot'], [])
+            conflict = await self.retry(original, body={**body, 'citation_mode': 'chunk'})
+            self.assertEqual(conflict.status_code, 409)
 
     async def test_tutor_requires_ask_mode_and_explicit_feature_flag(self):
         objective = {**self.objective, "capability": "LEARN", "task": "socratic_tutor"}

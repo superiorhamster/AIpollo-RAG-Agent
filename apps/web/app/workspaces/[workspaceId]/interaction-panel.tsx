@@ -53,6 +53,9 @@ type Plan = {
   steps: ({ tool: string; action: string } & Partial<PlanStep>)[]
   expected_outputs: string[]
 }
+type CitationMode = 'segment' | 'chunk'
+const citationModeKey = 'aipollo.ask.citation-mode'
+
 type Citation = CitationTarget & { chunk_id: string; name: string }
 type Result = { tutor_question?: string | null; kind?: string; claims: {
   text: string
@@ -99,6 +102,7 @@ export function InteractionPanel({
   const [savedArtifacts, setSavedArtifacts] = useState<Record<string, string>>({})
   const [copied, setCopied] = useState<string>()
   const [mode, setMode] = useState<Mode>('ASK')
+  const [citationMode, setCitationMode] = useState<CitationMode>('segment')
   const [plan, setPlan] = useState<Plan>()
   const [features, setFeatures] = useState({ custom_plan: false, socratic_tutor: false })
   useEffect(() => {
@@ -132,6 +136,23 @@ export function InteractionPanel({
   const retryRunIds = useRef(new Map<string, string>())
   const queryField = useRef<HTMLTextAreaElement>(null)
   const locked = busy || activeId !== undefined || retryingId !== undefined
+
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(citationModeKey) === 'chunk') setCitationMode('chunk')
+    } catch {
+      // The control still works for this visit when browser storage is blocked.
+    }
+  }, [])
+
+  function chooseCitationMode(value: CitationMode) {
+    setCitationMode(value)
+    try {
+      window.localStorage.setItem(citationModeKey, value)
+    } catch {
+      // The current selection remains in memory.
+    }
+  }
 
   useEffect(() => onSourcesLock(locked), [locked, onSourcesLock])
 
@@ -218,6 +239,7 @@ export function InteractionPanel({
     return api<Run>(base + '/runs', 'POST', {
       mode, objective, conversation_id: mode === 'ASK' ? conversationId : undefined,
       retry_of_run_id: retryOfRunId,
+      citation_mode: mode === 'ASK' && !retryOfRunId ? citationMode : undefined,
     }, crypto.randomUUID())
   }
 
@@ -404,7 +426,8 @@ export function InteractionPanel({
                 {text('From this chat', 'Từ cuộc trò chuyện này')}
               </span> : <div className="claim-citations">
                 {claim.citations.filter(citation => documents.some(doc => doc.document_id === citation.document_id))
-                  .map(citation => <button type="button" className="citation-pill" key={citation.chunk_id}
+                  .map(citation => <button type="button" className="citation-pill" key={citation.citation_id ?? citation.chunk_id}
+                    data-citation-id={citation.citation_id ?? citation.chunk_id}
                     onClick={() => onCitation(citation)}>
                     <DesignIcon name="citation" /><span>{citation.name}, page {citation.page}</span>
                   </button>)}
@@ -605,6 +628,12 @@ export function InteractionPanel({
             {modes.map(item => <button key={item.value} type="button" disabled={editing || locked}
               aria-pressed={effectiveMode === item.value} onClick={() => setMode(item.value)}>{text(item.label, item.vietnamese)}</button>)}
           </div>
+          {effectiveMode === 'ASK' && <select aria-label={text('Citation Mode', 'Chế độ trích dẫn')}
+            value={citationMode} disabled={locked}
+            onChange={event => chooseCitationMode(event.currentTarget.value === 'chunk' ? 'chunk' : 'segment')}>
+            <option value="segment">{text('Segment', 'Đoạn')}</option>
+            <option value="chunk">{text('Chunk', 'Khối')}</option>
+          </select>}
           <span className="badge badge-neutral composer-source-count"><DesignIcon name="source-count" /> {selectedSources.length} sources</span>
           <select aria-label="Capability" value={capability} disabled={locked}
             onChange={event => setCapability(event.currentTarget.value as Capability)}>

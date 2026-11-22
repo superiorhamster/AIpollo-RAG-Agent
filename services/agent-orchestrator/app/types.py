@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, StringConstraints, model_validator, model_serializer
 
-from rag_index import Chunk, SourceSelection
+from rag_index import Chunk, Region, SourceSelection
 
 Capability = Literal["LEARN", "RESEARCH", "WRITE"]
 Task = Literal[
@@ -81,6 +81,9 @@ class Version(BaseModel):
     plan_version: int = Field(ge=1)
 
 
+CitationMode = Literal["segment", "chunk"]
+
+
 class StartRun(BaseModel):
     mode: Literal["ASK", "AGENT", "PLAN"]
     objective: Objective | None = None
@@ -88,6 +91,7 @@ class StartRun(BaseModel):
     plan_version: int | None = Field(default=None, ge=1)
     conversation_id: UUID | None = None
     retry_of_run_id: UUID | None = None
+    citation_mode: CitationMode | None = None
 
     @model_validator(mode="after")
     def require_mode_inputs(self):
@@ -100,6 +104,8 @@ class StartRun(BaseModel):
             raise ValueError("Socratic tutoring requires Ask mode")
         if self.mode != "ASK" and self.conversation_id is not None:
             raise ValueError("Only Ask accepts a conversation")
+        if self.mode != "ASK" and self.citation_mode is not None:
+            raise ValueError("Only Ask accepts a citation mode")
         if self.mode != "ASK" and self.retry_of_run_id is not None:
             raise ValueError("Only Ask accepts a retry parent")
         return self
@@ -150,6 +156,10 @@ class SearchRewrite(BaseModel, extra="forbid"):
 
 
 class Citation(Chunk):
+    citation_id: UUID | None = None
+    segment_ids: list[UUID] | None = Field(default=None, min_length=1, max_length=6)
+    regions: list[Region] | None = Field(default=None, max_length=16)
+    precision: Literal["line", "coarse", "page"] | None = None
     document_id: UUID
     chunk_id: UUID
     name: str

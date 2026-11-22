@@ -6,16 +6,16 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from http.cookiejar import CookieJar, DefaultCookiePolicy
-from uuid import UUID, uuid5
+from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, Request, Response
 
 from rag_http import ApiError, health_response, install_http, request_id, require_service, unauthorized, unavailable
 from rag_runtime import RuntimeBudgets
-from rag_index import MAX_CHUNKS, EmbeddingConfig, IndexBatch, SourceSelection
+from rag_index import MAX_CHUNKS, EmbeddingConfig, IndexBatch, SourceSelection, point_id
 
-from .search import SearchRequest, SearchResult, delegated_search, delegated_sources, search
+from .search import DelegatedSearchRequest, SearchRequest, SearchResult, delegated_search, delegated_sources, search
 
 SERVICE = "retrieval-service"
 PREFIX = "rag_chunks_"
@@ -105,8 +105,8 @@ async def index_batch(workspace_id: UUID, document_id: UUID, batch: IndexBatch, 
             or any(len(vector) != batch.config.dimensions or not any(vector) for vector in batch.vectors)):
         raise ApiError(422, "invalid_index_batch", "The batch does not match the index schema.")
     points = [
-        {"id": str(uuid5(batch.generation, str(ordinal))), "vector": vector,
-         "payload": {**chunk.model_dump(mode="json"), "workspace_id": str(workspace_id),
+        {"id": str(point_id(batch.generation, ordinal)), "vector": vector,
+         "payload": {**chunk.model_dump(mode="json", exclude={"citation_segments_v1"} if not chunk.citation_segments_v1 else None), "workspace_id": str(workspace_id),
                      "document_id": str(document_id), "generation": str(batch.generation),
                      "ordinal": ordinal}}
         for ordinal, (chunk, vector) in enumerate(zip(batch.chunks, batch.vectors), start=batch.offset)
@@ -151,7 +151,8 @@ async def delete_index(workspace_id: UUID, request: Request, document_id: UUID |
         raise unavailable() from exc
     return Response(status_code=204)
 
-@app.post("/v1/workspaces/{workspace_id}/search")
+@app.post("/v1/workspaces/{workspace_id}/search", response_model=SearchResult,
+          response_model_exclude={"evidence": {"__all__": {"citation_segments_v1", "generation"}}})
 async def workspace_search(workspace_id: UUID, data: SearchRequest, request: Request) -> SearchResult:
     try:
         async with asyncio.timeout(RuntimeBudgets.from_env().search):
@@ -161,7 +162,7 @@ async def workspace_search(workspace_id: UUID, data: SearchRequest, request: Req
 
 
 @app.post("/internal/v1/workspaces/{workspace_id}/users/{user_id}/search", include_in_schema=False)
-async def worker_search(workspace_id: UUID, user_id: UUID, data: SearchRequest, request: Request) -> SearchResult:
+async def worker_search(workspace_id: UUID, user_id: UUID, data: DelegatedSearchRequest, request: Request) -> SearchResult:
     require_service(request, "X-Interaction-Service-Token", os.environ["RETRIEVAL_INTERACTION_TOKEN"])
     try:
         async with asyncio.timeout(RuntimeBudgets.from_env().search):

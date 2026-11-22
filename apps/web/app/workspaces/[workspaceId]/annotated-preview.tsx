@@ -54,7 +54,7 @@ export function AnnotatedPreview({ documentUrl, page, citation, onPage, onClearC
   }
 
   return <>
-    <PdfPreview url={documentUrl + '/preview'} page={page} onPage={onPage} regions={regions} citationRegion={citation?.region ?? undefined} onClearCitation={onClearCitation}
+    <PdfPreview url={documentUrl + '/preview'} page={page} onPage={onPage} regions={regions} citationRegion={citation?.region ?? undefined} citationRegions={citation?.regions} onClearCitation={onClearCitation}
       onRegion={selecting ? (region, selectedPage) => {
         setDraft({ page: selectedPage, region })
         setSelecting(false)
