@@ -106,9 +106,11 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
                 self.crash = False
                 raise asyncio.CancelledError()
             cells = []
-            for doc in [self.a, self.b]:
+            for document in payload['papers']:
+                doc = self.a if document == str(self.a) else self.b
                 parts = [p for p in payload['passages'] if p['document_id'] == str(doc)]
-                for criterion in ['Method', 'Dataset']:
+                for definition in payload['criteria']:
+                    criterion = definition['name']
                     found = next((p for p in parts if criterion in p['text']), None)
                     finding = 'Paper A reports 99 seconds.' if self.false_matrix_finding and doc==self.a and criterion=='Method' else found['text'] if found else ''
                     cells.append(dict(document_id=str(doc), criterion=criterion, status='supported' if found else 'insufficient',
@@ -202,6 +204,70 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('99', ' '.join(claim['text'] for claim in result['result']['claims']))
         self.assertEqual(self.verifications, 2)
         self.assertTrue(all(c['document_id'] == str(self.a) for claim in result['result']['claims'] for c in claim['citations']))
+
+    async def test_gap_replaces_entire_partly_unsupported_finding(self):
+        original = self.upstream
+        def upstream(request):
+            response = original(request)
+            if not request.url.path.endswith('/completions'):
+                return response
+            system, content = [m['content'] for m in json.loads(request.content)['messages']]
+            body = json.loads(content)
+            answer = json.loads(response.json()['text'])
+            if 'Evaluate each paper' in system and len(body['papers']) == 2:
+                for cell in answer['cells']:
+                    if cell['document_id'] == str(self.a) and cell['criterion'] == 'Method':
+                        cell['finding'] += ' No other timing conditions were reported.'
+            elif 'Semantically check each matrix cell' in system:
+                for source, verdict in zip(body['cells'], answer['cells'], strict=True):
+                    if 'No other timing conditions' in source['finding']:
+                        verdict['status'] = 'insufficient'
+            return httpx.Response(200, json={'text': json.dumps(answer)})
+        self.upstream = upstream
+        result = await self.run_research()
+        cell = next(cell for cell in result['result']['evidence_matrix']
+                    if cell['criterion'] == 'Method' and cell['document_id'] == str(self.a))
+        self.assertEqual(cell['status'], 'supported')
+        self.assertIn('transformer', cell['finding'])
+        self.assertNotIn('timing conditions', cell['finding'])
+
+    async def test_draft_budget_preserves_verified_base_before_coverage_repair(self):
+        self.objective.update(capability='WRITE', task='draft', document_ids=[str(self.a)])
+        os.environ['RESEARCH_MAX_MODEL_CALLS'] = '2'
+        result = await self.run_research()
+        self.assertEqual(result['status'], 'succeeded', result)
+        answer = result['result']
+        self.assertEqual(answer['budget_exhausted'], 'generation_budget')
+        self.assertTrue(answer['verified_draft'])
+        self.assertEqual(len(answer['claims']), 1)
+        self.assertEqual(answer['claims'][0]['citations'][0]['chunk_id'], str(self.ca))
+        self.assertEqual(len(self.models), 2)
+
+    async def test_draft_adds_missing_topic_from_an_already_cited_paper(self):
+        self.objective.update(capability='WRITE', task='draft', query='Describe the Orion and Vega methods and the Vega corpus.')
+        original = self.upstream
+        def upstream(request):
+            if request.url.path.endswith('/search'):
+                return httpx.Response(200, json={'evidence': [
+                    self.evidence(self.a, self.ca, 'Orion uses clustering.'),
+                    self.evidence(self.b, self.cb, 'Vega uses pooling on corpus Z.')]})
+            if request.url.path.endswith('/completions'):
+                messages = json.loads(request.content)['messages']
+                if 'Draft a cited paragraph' in messages[0]['content']:
+                    body = json.loads(messages[1]['content'])
+                    if 'verified_claims' in body:
+                        self.assertEqual(body['verified_claims'], ['Orion uses clustering.', 'Vega uses corpus Z.'])
+                        claims = [('Vega uses pooling.', self.cb)]
+                    else:
+                        claims = [('Orion uses clustering.', self.ca), ('Vega uses corpus Z.', self.cb)]
+                    return httpx.Response(200, json={'text': json.dumps({'claims': [
+                        {'text': text, 'evidence': [str(identifier)]} for text, identifier in claims]})})
+            return original(request)
+        self.upstream = upstream
+        result = await self.run_research()
+        self.assertEqual([claim['text'] for claim in result['result']['claims']],
+                         ['Orion uses clustering.', 'Vega uses corpus Z.', 'Vega uses pooling.'])
+        self.assertEqual(self.verifications, 2)
 
     async def test_private_mock_defense_separates_target_and_counter_evidence(self):
         conversation = None
@@ -320,7 +386,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('private-criterion-fixture',attempts[1])
         self.assertFalse(any('private-criterion-fixture' in line for line in logs.output))
 
-    async def test_gap_context_prioritizes_new_facts_and_skips_unchanged_reads(self):
+    async def test_gap_context_prioritizes_new_facts_with_focused_grading(self):
         original = self.upstream
         dense = [self.evidence(self.b, self.cb if i == 0 else uuid4(), 'Method B uses recurrence.' if i == 0 else 'background ' * 180) for i in range(6)]
         grading_calls = 0
@@ -339,8 +405,42 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         dataset = next(cell for cell in result['result']['evidence_matrix'] if cell['document_id']==str(self.b) and cell['criterion']=='Dataset')
         self.assertEqual(dataset['status'],'supported')
         self.assertEqual(dataset['citations'][0]['chunk_id'],str(self.cd))
-        # Initial grading plus one grading of new evidence; the unchanged A read needs no model call.
-        self.assertEqual(grading_calls,2)
+        # Initial grading plus one focused pass per successful supplemental read.
+        self.assertEqual(grading_calls,3)
+
+    async def test_gap_recovers_omitted_existing_fact_without_regrading_verified_cells(self):
+        original = self.upstream
+        scopes = []
+        def upstream(request):
+            response = original(request)
+            if request.url.path.endswith('/completions'):
+                body = json.loads(request.content)
+                if 'Evaluate each paper' in body['messages'][0]['content']:
+                    payload = json.loads(body['messages'][1]['content'])
+                    scopes.append((payload['papers'], [criterion['name'] for criterion in payload['criteria']]))
+                    output = json.loads(response.json()['text'])
+                    # Simulate the real-model false negative despite the method being in B's existing chunk.
+                    if len(scopes) == 1:
+                        for cell in output['cells']:
+                            if cell['document_id'] == str(self.b) and cell['criterion'] == 'Method':
+                                cell.update(status='insufficient', finding='', evidence=[])
+                    else:
+                        # An unrelated verified finding must not be exposed to a later grader's abstention.
+                        for cell in output['cells']:
+                            if cell['document_id'] == str(self.a) and cell['criterion'] == 'Method':
+                                cell.update(status='insufficient', finding='', evidence=[])
+                    return httpx.Response(200, json={'text': json.dumps(output)})
+            return response
+        self.upstream = upstream
+        result = await self.run_research()
+        self.assertEqual(result['status'], 'succeeded', result)
+        cells = {(cell['document_id'], cell['criterion']): cell for cell in result['result']['evidence_matrix']}
+        self.assertEqual(cells[(str(self.a), 'Method')]['status'], 'supported')
+        self.assertEqual(cells[(str(self.b), 'Method')]['status'], 'supported')
+        self.assertEqual(cells[(str(self.b), 'Method')]['citations'][0]['chunk_id'], str(self.cb))
+        self.assertEqual(scopes, [([str(self.a), str(self.b)], ['Method', 'Dataset']),
+                                  ([str(self.a)], ['Dataset']), ([str(self.b)], ['Method', 'Dataset'])])
+        self.assertLessEqual(len(self.models), 12)
 
     async def test_uncited_candidates_are_removed_before_semantic_verification(self):
         original = self.upstream

@@ -455,3 +455,14 @@ test('provider outages show localized guidance and preserve retry', async ({ pag
   await expect(assistant.getByRole('alert')).toContainText('Dịch vụ AI hiện không khả dụng.')
   await expect(assistant.getByRole('button', { name: 'Retry', exact: true })).toBeEnabled()
 })
+
+// Exercise the web relay deadline independently of Gateway's delayed HTTP test.
+test('web relay allows slow registration and login responses', async ({ request, baseURL }) => {
+  const options = { headers: { Origin: baseURL! }, timeout: 20000,
+    data: { email: 'slow-auth@example.com', password: 'Fixture12!' } }
+  const [registered, signedIn] = await Promise.all([
+    request.post('/v1/auth/register', options), request.post('/v1/auth/login', options),
+  ])
+  expect(registered.status()).toBe(201)
+  expect(signedIn.status()).toBe(200)
+})

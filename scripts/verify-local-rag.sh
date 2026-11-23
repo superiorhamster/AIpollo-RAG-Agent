@@ -24,6 +24,14 @@ cleanup() {
   trap - EXIT
   docker cp "$COMPOSE_PROJECT_NAME-browser:/tests/test-results/." "$artifact_dir" >/dev/null 2>&1 || true
   docker rm "$COMPOSE_PROJECT_NAME-browser" >/dev/null 2>&1 || true
+  # Retain stage timings for the synthetic corpus even when the browser stops before generation.
+  "${compose[@]}" logs --no-color ingestion-service document-parser model-gateway |
+    python3 -c 'import json,sys
+for line in sys.stdin:
+    try: event=json.loads(line[line.index("{"):])
+    except (ValueError,TypeError): continue
+    if event.get("event")=="http.request" and event.get("route") in {"/internal/v1/parse","/internal/v1/embeddings"}:
+        print(json.dumps({key:event.get(key) for key in ("service","route","request_id","status","duration_ms")}))' > "$artifact_dir/index-timings.jsonl" || true
   if ((result != 0)); then
     "${compose[@]}" logs --tail=30 agent-orchestrator ingestion-service model-gateway document-parser api-gateway auth-service web >&2 || true
   fi
@@ -38,9 +46,9 @@ if [[ "$scenario" == baseline ]]; then
   "${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared \
     -v "$PWD/tests/eval:/eval:ro" model-gateway python /eval/embedding_provider.py
 fi
-read -r parse_seconds run_seconds <<< "$("${compose[@]}" exec -T ingestion-service python -c 'from rag_runtime import RuntimeBudgets; b=RuntimeBudgets.from_env(); print(b.parse, b.run)')"
+read -r index_seconds run_seconds <<< "$("${compose[@]}" exec -T ingestion-service python -c 'from rag_runtime import RuntimeBudgets; b=RuntimeBudgets.from_env(); print(b.index, b.run)')"
 "${compose[@]}" --profile phase01-test run --build --no-deps --name "$COMPOSE_PROJECT_NAME-browser" \
-  -e "LOCAL_RAG_PARSE_SECONDS=$parse_seconds" -e "LOCAL_RAG_RUN_SECONDS=$run_seconds" \
+  -e "EXPECT_CITATION_MODE_SWITCH=${EXPECT_CITATION_MODE_SWITCH:-0}" -e "LOCAL_RAG_INDEX_SECONDS=$index_seconds" -e "LOCAL_RAG_RUN_SECONDS=$run_seconds" \
   -v "$PWD/$browser_spec:/tests/workspace.spec.ts:ro" phase01-browser-tests
 if [[ "$scenario" == research ]]; then
   docker cp "$COMPOSE_PROJECT_NAME-browser:/tests/test-results/." "$artifact_dir"

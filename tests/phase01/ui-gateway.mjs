@@ -30,6 +30,9 @@ createServer(async (request, response) => {
   if (path.endsWith('/events')) { response.writeHead(200, { 'Content-Type': 'text/event-stream' }); return response.end('data: ' + JSON.stringify(runView) + '\n\n') }
   if (path.endsWith('/workflow-features')) return json({ custom_plan: true, socratic_tutor: true, curriculum: true, research: true, discovery: true, mock_defense: true })
   if (path.endsWith('/auth/me')) return json(account)
+  if (['/v1/auth/register', '/v1/auth/login'].includes(path) && JSON.parse(bytes.length ? bytes.toString() : '{}').email === 'slow-auth@example.com') {
+    await new Promise(resolve => setTimeout(resolve, 9000))
+  }
   if (path.endsWith('/auth/register')) return json(account, 201)
   if (path.endsWith('/auth/login')) return json(account)
   if (path.endsWith('/jobs')) return json([{ job_id: '99999999-9999-4999-8999-999999999999', kind: 'index', status: 'succeeded', attempts: 1, error_code: null }])

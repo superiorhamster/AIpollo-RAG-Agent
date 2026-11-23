@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 const root = resolve(__dirname, '../..')
 const remote = process.env.UI_TEST_REMOTE === '1'
 export default defineConfig({
-  testMatch: 'ui.spec.ts',
+  testMatch: ['ui.spec.ts', 'live-session.spec.ts'],
   timeout: 60000,
   workers: 1,
   use: { baseURL: process.env.PHASE01_TEST_ORIGIN ?? 'http://127.0.0.1:24000', trace: 'retain-on-failure', screenshot: 'only-on-failure' },

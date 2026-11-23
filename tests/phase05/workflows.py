@@ -83,6 +83,33 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         outcome = (await self.api.get(self.base + '/runs/' + str(run['run_id']))).json()
         self.assertEqual(outcome['status'], 'cancelled')
 
+    async def test_revoked_source_between_steps_stops_before_generation(self):
+        plan = (await self.post('/plans', {**self.objective, 'steps': self.steps[:2]})).json()
+        await self.post('/plans/' + plan['plan_id'] + '/accept', {'plan_version': 1})
+        started = (await self.post('/runs', dict(mode='PLAN', plan_id=plan['plan_id'], plan_version=1))).json()
+        revoked = False
+        def upstream(request):
+            if request.url.host == 'workspace-service':
+                return httpx.Response(200)
+            if request.url.path.endswith('/validate-sources'):
+                return httpx.Response(404 if revoked else 204)
+            if request.url.path.endswith('/search'):
+                return httpx.Response(200, json={'evidence': []})
+            self.fail('No model call is authorized after source revocation')
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            worker = Worker(self.database, client)
+            save_step = worker.save_step
+            async def revoke_after_first(*args, **kwargs):
+                nonlocal revoked
+                await save_step(*args, **kwargs)
+                if args[3] == 'succeeded':
+                    revoked = True
+            worker.save_step = revoke_after_first
+            await worker.execute(await worker.claim())
+        outcome = (await self.api.get(self.base + '/runs/' + started['run_id'])).json()
+        self.assertTrue(revoked)
+        self.assertEqual((outcome['status'], outcome['error_code']), ('failed', 'source_unavailable'))
+
     async def test_restart_does_not_reset_the_workflow_deadline(self):
         plan = (await self.post('/plans', {**self.objective, 'steps': self.steps[:2]})).json()
         await self.post('/plans/' + plan['plan_id'] + '/accept', {'plan_version': 1})

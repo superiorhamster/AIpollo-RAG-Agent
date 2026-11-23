@@ -74,7 +74,9 @@ def main():
                     verdicts.update({row.index:row.status for row in result.claims})
                     for record in batch:
                         verdict=next(row for row in result.claims if row.index==record['index'])
-                        if verdict.status=='supported':coverage.setdefault(record['mode']+':'+record['case'],set()).update(verdict.covers)
+                        for key in (record['mode']+':'+record['case'], record['mode']+':'+record['case']+':'+record['record_type']):
+                            covered=coverage.setdefault(key,set())
+                            if verdict.status=='supported':covered.update(verdict.covers)
                     break
                 except ValueError:
                     if attempt:raise SystemExit('Independent evaluation returned invalid verdicts')
@@ -90,9 +92,9 @@ def main():
         'conflicting_numbers':{'a.gamma_accuracy','b.gamma_accuracy'},
         'verified_draft':{'a.method','b.method','b.dataset'},
     }
-    coverage_report={key:{'covered':sorted(cells & expected_coverage[key.split(':',1)[1]]),
-        'expected':sorted(expected_coverage[key.split(':',1)[1]]),
-        'rate':len(cells & expected_coverage[key.split(':',1)[1]])/len(expected_coverage[key.split(':',1)[1]])} for key,cells in coverage.items()}
+    coverage_report={key:{'covered':sorted(cells & expected_coverage[key.split(':')[1]]),
+        'expected':sorted(expected_coverage[key.split(':')[1]]),
+        'rate':len(cells & expected_coverage[key.split(':')[1]])/len(expected_coverage[key.split(':')[1]])} for key,cells in coverage.items()}
     new_groups=[group for key,group in groups.items() if key.startswith('AGENT:')]
     passed=(bool(new_groups) and all(group['support_rate']==1 for group in new_groups)
             and all(coverage_report.get('AGENT:'+case,{}).get('rate',0)==1 for case in expected_coverage))

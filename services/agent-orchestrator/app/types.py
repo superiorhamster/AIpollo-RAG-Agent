@@ -174,6 +174,15 @@ class GeneratedAnswer(BaseModel):
     claims: list[Claim] = Field(max_length=12)
 
 
+class CandidateClaim(Claim):
+    # Internal proposals can abstain per entry. Published Claim still requires evidence.
+    evidence: list[UUID] = Field(max_length=6)
+
+
+class CandidateAnswer(BaseModel):
+    claims: list[CandidateClaim] = Field(max_length=12)
+
+
 class AskClaim(Claim):
     evidence: list[UUID] = Field(max_length=6)
     source: Literal["document", "conversation"] = "document"

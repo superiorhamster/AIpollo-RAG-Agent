@@ -1,6 +1,7 @@
+import { sessionRequests, waitForIndex } from './live-session'
 import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { expect, test, type APIResponse } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 
 type Citation = { document_id: string; chunk_id: string; name: string; page: number; text: string; region?: number[] }
 type Claim = { text: string; citations: Citation[] }
@@ -11,26 +12,13 @@ type Run = { run_id: string; request_id: string; status: string; error_code?: st
 } }
 
 test('real agentic paper coverage, verified drafting and personal learning', async ({ page, baseURL }) => {
-  const indexTimeout = (Number(process.env.LOCAL_RAG_PARSE_SECONDS ?? 300) + 150) * 1000
+  const indexTimeout = (Number(process.env.LOCAL_RAG_INDEX_SECONDS ?? 1800) + 30) * 1000
   const runTimeout = (Number(process.env.LOCAL_RAG_RUN_SECONDS ?? 210) + 30) * 1000
   test.setTimeout(indexTimeout * 2 + runTimeout * 9 + 60000)
   const evaluationDir = '/tests/test-results/evaluation'
   await mkdir(evaluationDir, { recursive: true })
   const origin = baseURL!
-  async function withSession(send: () => Promise<APIResponse>) {
-    let response = await send()
-    if (response.status() === 401) {
-      const renewed = await page.request.post('/v1/auth/refresh', { headers: { Origin: origin } })
-      expect(renewed.status()).toBe(204)
-      response = await send()
-    }
-    return response
-  }
-  const authed = {
-    get: (...args: Parameters<typeof page.request.get>) => withSession(() => page.request.get(...args)),
-    post: (...args: Parameters<typeof page.request.post>) => withSession(() => page.request.post(...args)),
-    delete: (...args: Parameters<typeof page.request.delete>) => withSession(() => page.request.delete(...args)),
-  }
+  const authed = sessionRequests(page.request, origin)
   const headers = () => ({ Origin: origin, 'Idempotency-Key': randomUUID() })
   const modelRuns: { case: string; mode: string; milliseconds: number; poll_retries: number; run: Run }[] = []
   const factsA = 'Model Alpha uses a transformer encoder with sparse attention. Latency is 3 seconds per batch. Under protocol P with hardware Omega and seed 7, the shared baseline Model Gamma has accuracy 84%. The draft asserts that all encoders must use transformers, without a citation for this universal claim.'
@@ -54,7 +42,7 @@ test('real agentic paper coverage, verified drafting and personal learning', asy
   await expect(page).toHaveURL(/\/sign-in\?registered=1$/, { timeout: 20000 })
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password', { exact: true }).fill('LiveTest12!')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click({ timeout: 20000 })
   await expect(page).toHaveURL(/\/workspaces$/, { timeout: 20000 })
   const created = await authed.post('/v1/workspaces', { headers: headers(), data: { name: 'Synthetic agentic quality evaluation' } })
   expect(created.status()).toBe(201)
@@ -67,13 +55,7 @@ test('real agentic paper coverage, verified drafting and personal learning', asy
       expect(response.status()).toBe(201)
       const document = (await response.json()).document_id
       documents.push(document)
-      let indexingReadRetries = 0
-      await expect.poll(async () => {
-        const jobs = await authed.get(base + `/documents/${document}/jobs`, { timeout: 20000 })
-        if (jobs.status() === 503 && indexingReadRetries < 3) { indexingReadRetries += 1; return 'unavailable' }
-        expect(jobs.status()).toBe(200)
-        return (await jobs.json() as { kind: string; status: string }[]).find(job => job.kind === 'index')?.status
-      }, { timeout: indexTimeout, intervals: [2000, 4000] }).toBe('succeeded')
+      await waitForIndex(() => authed.get(base + `/documents/${document}/jobs`, { timeout: 20000 }), indexTimeout)
     }
     async function run(mode: 'ASK' | 'AGENT', capability: string, task: string, query: string, scenario: string, extra = {}) {
       const before = Date.now()

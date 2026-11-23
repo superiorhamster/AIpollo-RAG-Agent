@@ -5,7 +5,8 @@ ARG SERVICE
 WORKDIR /app
 COPY --from=uv /uv /usr/local/bin/uv
 COPY ${SERVICE}/pyproject.toml ${SERVICE}/uv.lock ./
-RUN uv sync --locked --no-dev
+ARG TEST_GROUP
+RUN if [ -n "$TEST_GROUP" ]; then uv sync --locked --no-dev --group "$TEST_GROUP"; else uv sync --locked --no-dev; fi
 
 FROM python:3.12.16-slim-bookworm AS runtime
 

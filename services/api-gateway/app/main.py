@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import logging
 import os
 import re
 from collections.abc import AsyncIterator
@@ -226,7 +227,7 @@ async def proxy(request: Request, path: str) -> Response:
         timeout = app.state.client.timeout
         if upload:
             timeout = httpx.Timeout(120, connect=5)
-        elif path.startswith("auth/password-reset") or path.startswith("admin/") or path.endswith("/references/discover"):
+        elif path in {"auth/register", "auth/login"} or path.startswith("auth/password-reset") or path.startswith("admin/") or path.endswith("/references/discover"):
             timeout = httpx.Timeout(14, connect=5)
         elif path.endswith("/jobs"):
             timeout = httpx.Timeout(15, connect=5)
@@ -238,6 +239,8 @@ async def proxy(request: Request, path: str) -> Response:
         )
         upstream_response = await app.state.client.send(outbound, stream=stream)
     except httpx.HTTPError as exc:
+        logging.getLogger(__name__).warning("Upstream transport failure request_id=%s service=%s error=%s",
+                                            request_id(request), urlsplit(upstream).hostname, type(exc).__name__)
         raise unavailable() from exc
 
     result_headers = {name: upstream_response.headers[name] for name in (

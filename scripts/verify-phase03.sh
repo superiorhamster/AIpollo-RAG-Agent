@@ -34,6 +34,7 @@ run_check() {
 }
 
 "${compose[@]}" up --build --wait --wait-timeout "${VERIFY_WAIT_TIMEOUT:-300}" web
+"${compose[@]}" exec -T api-gateway python - < tests/api-gateway/auth_deadlines.py
 "${compose[@]}" run --rm --no-deps -T document-parser python - < tests/phase03/parser.py
 "${compose[@]}" run --rm --no-deps -T document-parser python - < tests/phase03/parser_lifecycle.py
 "${compose[@]}" stop agent-orchestrator

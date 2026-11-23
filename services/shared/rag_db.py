@@ -1,6 +1,7 @@
 """Database connection and migration setup. Each caller supplies its own schema."""
 
 import asyncio
+import logging
 import os
 
 from alembic import context
@@ -30,7 +31,8 @@ def open_database() -> AsyncEngine:
 
 def install_database_errors(app: FastAPI) -> None:
     @app.exception_handler(SQLAlchemyError)
-    async def database_error(request: Request, _: SQLAlchemyError) -> JSONResponse:
+    async def database_error(request: Request, exc: SQLAlchemyError) -> JSONResponse:
+        logging.getLogger(__name__).warning("Database failure request_id=%s error=%s", request_id(request), type(exc).__name__)
         return JSONResponse({
             "code": "unavailable",
             "message": "The database operation could not be completed.",

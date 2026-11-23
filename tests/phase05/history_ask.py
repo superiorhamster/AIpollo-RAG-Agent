@@ -302,6 +302,61 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
         self.assertIn('cộng thêm', packed_history[2][-1]['question'])
         self.assertIsNone(run['result']['tutor_question'])
 
+    async def test_structured_candidates_preserve_cited_siblings_and_abstain_without_evidence(self):
+        def upstream(request):
+            if request.url.host == 'retrieval-service':
+                return httpx.Response(200, json={'evidence': [SCHEDULE]})
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            for valid in (True, False):
+                run = self.new_run('Compare the reported schedule and dataset', new_thread=True)
+                run['input'].update(task='comparison', capability='RESEARCH')
+                candidate = {'text': 'Dataset not provided.', 'evidence': []}
+                with self.assertRaises(ValueError):
+                    GeneratedAnswer.model_validate({'claims': [candidate]})
+                worker = Worker(self.database, client)
+                claims = [claim('The demo begins at 14:00.', SCHEDULE)] if valid else []
+                worker.complete = AsyncMock(return_value=json.dumps({'claims': [*claims, candidate]}))
+                await worker.execute(run)
+                self.assertEqual(run['status'], 'succeeded', run.get('error'))
+                self.assertEqual(worker.complete.await_count, 1)
+                self.assertEqual(run['result']['insufficient_evidence'], not valid)
+                self.assertEqual(len(run['result']['claims']), int(valid))
+                if valid:
+                    self.assertEqual(run['result']['claims'][0]['citations'], [SCHEDULE])
+
+    async def test_structured_candidates_reject_unknown_source_ids(self):
+        def upstream(request):
+            if request.url.host == 'retrieval-service':
+                return httpx.Response(200, json={'evidence': [SCHEDULE]})
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            run = self.new_run(Q1, new_thread=True)
+            run['input'].update(task='comparison', capability='RESEARCH')
+            worker = Worker(self.database, client)
+            worker.complete = AsyncMock(return_value=json.dumps({'claims': [claim('Wrong source', CHECKLIST)]}))
+            with self.assertLogs('app.worker', level='WARNING'):
+                await worker.execute(run)
+            self.assertEqual(worker.complete.await_count, 2)
+            self.assertEqual((run['status'], run['error']), ('failed', 'invalid_model_output'))
+
+    async def test_invalid_tutor_question_receives_one_specific_repair(self):
+        def upstream(request):
+            if request.url.host == 'retrieval-service':
+                return httpx.Response(200, json={'evidence': [SCHEDULE]})
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            run = self.new_run(Q1, new_thread=True)
+            run['input'].update(task='socratic_tutor', tutor_action='guide')
+            worker = Worker(self.database, client)
+            worker.complete = AsyncMock(return_value=json.dumps({'claims': [], 'question': None}))
+            with self.assertLogs('app.worker', level='WARNING') as logs:
+                await worker.execute(run)
+            self.assertEqual(worker.complete.await_count, 2)
+            self.assertIn('Return one nonempty guiding question', worker.complete.await_args_list[1].args[1])
+            self.assertIn('rule=question', ' '.join(logs.output))
+            self.assertEqual((run['status'], run['error']), ('failed', 'invalid_model_output'))
+
     async def test_generation_repair_validates_envelope_uuid_and_provenance(self):
         good = json.dumps({"claims": [claim("14:00 thứ Sáu.", SCHEDULE)]})
         invalid = [

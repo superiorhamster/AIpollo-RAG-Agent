@@ -33,6 +33,15 @@ test('uploads PDF and DOCX, navigates pages, downloads the original, and deletes
   await expect(page.getByRole('status').filter({ hasText: 'Match on page 2' })).toBeVisible()
   await page.getByRole('button', { name: 'Find in PDF', exact: true }).click()
 
+  const notes = page.getByRole('region', { name: 'Personal annotations' })
+  await notes.getByLabel('Personal note').fill('Synthetic page two note')
+  await notes.getByRole('button', { name: 'Save note or highlight' }).click()
+  await expect(notes.getByText('Synthetic page two note')).toBeVisible()
+  await page.reload()
+  await expect(notes.getByText('Synthetic page two note')).toBeVisible()
+  await notes.getByRole('button', { name: 'Remove annotation' }).click()
+  await expect(notes.getByText('Synthetic page two note')).toHaveCount(0)
+
   await page.getByRole('complementary', { name: 'Workspace navigation' })
     .getByRole('button', { name: 'Library', exact: true }).click()
   await page.getByLabel('Document file').setInputFiles('/fixtures/paper.docx')

@@ -15,7 +15,7 @@ async function relay(request: Request, context: Context): Promise<Response> {
   const upload = request.method === 'POST' && path.length === 3 && path[2] === 'documents'
   const search = path.length === 3 && path[0] === 'workspaces' && path[2] === 'search'
   const file = path[2] === 'documents' && ['preview', 'original'].includes(path[4])
-  const remote = path[0] === 'admin' || path[1] === 'password-reset'
+  const remote = path[0] === 'admin' || (path[0] === 'auth' && ['register', 'login', 'password-reset'].includes(path[1]))
   const discovery = path[2] === 'references' && path[3] === 'discover'
   const jobs = path[2] === 'documents' && path[4] === 'jobs'
   const searchTimeout = (Number(process.env.MODEL_EMBEDDING_TIMEOUT_SECONDS ?? '60') + 60) * 1000
