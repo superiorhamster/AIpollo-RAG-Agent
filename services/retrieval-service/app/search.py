@@ -193,31 +193,34 @@ async def search(
         raise unavailable() from exc
 
 
-async def delegated_search(
-    workspace_id: UUID, user_id: UUID, data: SearchRequest, request: Request,
-    client: httpx.AsyncClient, qdrant: httpx.AsyncClient,
-) -> SearchResult:
+async def delegated_sources(workspace_id: UUID, user_id: UUID, request: Request,
+                            client: httpx.AsyncClient) -> dict[UUID, str]:
     headers = {"X-Request-ID": request_id(request)}
     base = f"http://workspace-service:8000/internal/v1/workspaces/{workspace_id}/interaction-access"
     auth_headers = {**headers, "X-Interaction-Service-Token": os.environ["WORKSPACE_INTERACTION_TOKEN"]}
     document_headers = {**headers, "X-Retrieval-Service-Token": os.environ["DOCUMENT_RETRIEVAL_TOKEN"]}
     sources = f"http://document-service:8000/internal/v1/workspaces/{workspace_id}/retrieval-sources"
 
-    async def scope() -> dict[UUID, str]:
-        access = await client.get(base, params={"user_id": str(user_id)}, headers=auth_headers)
-        if access.status_code in (401, 404):
-            raise ApiError(404, "not_found", "The workspace or one of its sources could not be found.")
-        access.raise_for_status()
-        response = await client.get(sources, headers=document_headers)
-        response.raise_for_status()
-        return {UUID(item["document_id"]): item["name"] for item in response.json()}
+    access = await client.get(base, params={"user_id": str(user_id)}, headers=auth_headers)
+    if access.status_code in (401, 404):
+        raise ApiError(404, "not_found", "The workspace or one of its sources could not be found.")
+    access.raise_for_status()
+    response = await client.get(sources, headers=document_headers)
+    response.raise_for_status()
+    return {UUID(item["document_id"]): item["name"] for item in response.json()}
 
+
+async def delegated_search(
+    workspace_id: UUID, user_id: UUID, data: SearchRequest, request: Request,
+    client: httpx.AsyncClient, qdrant: httpx.AsyncClient,
+) -> SearchResult:
+    headers = {"X-Request-ID": request_id(request)}
     try:
-        names = await scope()
+        names = await delegated_sources(workspace_id, user_id, request, client)
         if set(data.document_ids) - names.keys():
             raise ApiError(404, "not_found", "The workspace or one of its sources could not be found.")
         result = await candidates(client, qdrant, workspace_id, data, names, headers)
-        current = await scope()
+        current = await delegated_sources(workspace_id, user_id, request, client)
         result.evidence = [item for item in result.evidence if item.document_id in current]
         result.indexed_documents = [item for item in result.indexed_documents if item in current]
         return result

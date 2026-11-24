@@ -86,7 +86,7 @@ services:
 
   auth-service:
     build: *auth-build
-    environment:
+    environment: &auth-test-environment
       <<: *database
       ADMIN_DOMAIN_TOKEN: ${ADMIN_DOMAIN_TOKEN:?Run make env}
       DB_USER: rag_auth
@@ -109,6 +109,13 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+
+  identity-tests:
+    profiles: [phase01-test]
+    build:
+      <<: *backend-build
+      args: { SERVICE: auth-service, TEST_GROUP: test }
+    environment: *auth-test-environment
 
   workspace-service:
     build: *workspace-build
@@ -356,6 +363,15 @@ services:
       RETRIEVAL_INTERACTION_TOKEN: ${RETRIEVAL_INTERACTION_TOKEN:?Run make env}
       MODEL_CHAT_TOKEN: ${MODEL_CHAT_TOKEN:?Run make env}
       RUN_TIMEOUT_SECONDS: ${RUN_TIMEOUT_SECONDS:-210}
+      AGENTIC_WORKFLOW_ENABLED: ${AGENTIC_WORKFLOW_ENABLED:-false}
+      AGENTIC_TUTOR_ENABLED: ${AGENTIC_TUTOR_ENABLED:-false}
+      AGENTIC_CURRICULUM_ENABLED: ${AGENTIC_CURRICULUM_ENABLED:-false}
+      AGENTIC_RESEARCH_ENABLED: ${AGENTIC_RESEARCH_ENABLED:-false}
+      AGENTIC_DISCOVERY_ENABLED: ${AGENTIC_DISCOVERY_ENABLED:-false}
+      AGENTIC_WRITING_ENABLED: ${AGENTIC_WRITING_ENABLED:-false}
+      AGENTIC_DEFENSE_ENABLED: ${AGENTIC_DEFENSE_ENABLED:-false}
+      RESEARCH_MAX_TOTAL_OUTPUT_TOKENS: ${RESEARCH_MAX_TOTAL_OUTPUT_TOKENS:-16384}
+      RESEARCH_MAX_MODEL_CALLS: ${RESEARCH_MAX_MODEL_CALLS:-12}
       RUN_MAX_ATTEMPTS: ${RUN_MAX_ATTEMPTS:-2}
       RUN_MAX_OUTPUT_TOKENS: ${RUN_MAX_OUTPUT_TOKENS:-800}
       ASK_SENTENCE_CITATIONS: ${ASK_SENTENCE_CITATIONS:-legacy}
@@ -394,6 +410,8 @@ services:
       <<: *database
       DB_USER: rag_artifacts
       DB_PASSWORD: ${ARTIFACT_DB_PASSWORD:?Run make env}
+      ADAPTIVE_FLASHCARDS_ENABLED: ${ADAPTIVE_FLASHCARDS_ENABLED:-false}
+      INTERACTIVE_CONCEPT_MAP_ENABLED: ${INTERACTIVE_CONCEPT_MAP_ENABLED:-false}
       WORKSPACE_INTERACTION_TOKEN: ${WORKSPACE_INTERACTION_TOKEN:?Run make env}
       ORCHESTRATION_ARTIFACT_TOKEN: ${ORCHESTRATION_ARTIFACT_TOKEN:?Run make env}
 
@@ -429,6 +447,8 @@ services:
       MODEL_CHAT_BASE_URL: ${MODEL_CHAT_BASE_URL:-}
       MODEL_CHAT_NAME: ${MODEL_CHAT_NAME:-}
       MODEL_CHAT_API_KEY: ${MODEL_CHAT_API_KEY:-}
+      MODEL_CHAT_REASONING_EFFORT: ${MODEL_CHAT_REASONING_EFFORT:-}
+      MODEL_CHAT_RESPONSE_FORMAT: ${MODEL_CHAT_RESPONSE_FORMAT:-}
       MODEL_PROVIDER: ${MODEL_PROVIDER:-disabled}
       MODEL_EMBEDDING_TOKEN: ${MODEL_EMBEDDING_TOKEN:?Run make env}
       MODEL_EMBEDDING_BASE_URL: ${MODEL_EMBEDDING_BASE_URL:-}

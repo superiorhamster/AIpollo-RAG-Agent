@@ -44,6 +44,7 @@ trap cleanup EXIT
 "${compose[@]}" run --rm -T --no-deps auth-migrate python - < tests/phase01/legacy-session.py
 "${compose[@]}" up --build --wait --wait-timeout "${VERIFY_WAIT_TIMEOUT:-300}" web
 "${compose[@]}" exec -T auth-service python - < tests/phase01/jwt-claims.py
+"${compose[@]}" --profile phase01-test run --build --rm --no-deps -T identity-tests python - < tests/phase09/identity.py
 read -r admin_id PHASE01_PROMOTED_ACCESS <<< "$("${compose[@]}" exec -T -e WEB_ORIGIN workspace-service python - --seed-admin < tests/phase01/api.py)"
 export PHASE01_PROMOTED_ACCESS
 "${compose[@]}" exec -T auth-service python -m app.promote_admin "$admin_id"

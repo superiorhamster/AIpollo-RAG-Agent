@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import logging
 import os
 import re
 from collections.abc import AsyncIterator
@@ -43,6 +44,8 @@ ARTIFACT_PATHS = (
     (re.compile(rf"workspaces/{UUID_PATH}/artifacts"), ("GET", "POST")),
     (re.compile(rf"workspaces/{UUID_PATH}/artifacts/{UUID_PATH}"), ("GET", "PATCH", "DELETE")),
     (re.compile(rf"workspaces/{UUID_PATH}/artifacts/{UUID_PATH}/export/(?:md|docx)"), ("GET",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/artifacts/{UUID_PATH}/cards"), ("GET",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/artifacts/{UUID_PATH}/cards/{UUID_PATH}/reviews"), ("POST",)),
 )
 WORKSPACE_PATHS = (
     (re.compile(rf"workspaces/{UUID_PATH}/references"), ("GET", "POST")),
@@ -54,11 +57,12 @@ WORKSPACE_PATHS = (
     (re.compile(rf"workspaces/{UUID_PATH}/members/{UUID_PATH}"), ("PUT", "DELETE")),
 )
 INTERACTION_PATHS = (
+    (re.compile(rf"workspaces/{UUID_PATH}/workflow-features"), ("GET",)),
     (re.compile(rf"workspaces/{UUID_PATH}/(?:plans|runs)"), ("POST",)),
     (re.compile(rf"workspaces/{UUID_PATH}/plans/{UUID_PATH}"), ("GET", "PATCH")),
     (re.compile(rf"workspaces/{UUID_PATH}/plans/{UUID_PATH}/(?:accept|regenerate|cancel)"), ("POST",)),
     (re.compile(rf"workspaces/{UUID_PATH}/runs/{UUID_PATH}/cancel"), ("POST",)),
-    (re.compile(rf"workspaces/{UUID_PATH}/runs/{UUID_PATH}(?:/events)?"), ("GET",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/runs/{UUID_PATH}(?:/events|/steps)?"), ("GET",)),
     (re.compile(rf"workspaces/{UUID_PATH}/conversations(?:/{UUID_PATH})?"), ("GET",)),
 )
 WORKSPACE_SEARCH = re.compile(rf"workspaces/{UUID_PATH}/search")
@@ -223,7 +227,7 @@ async def proxy(request: Request, path: str) -> Response:
         timeout = app.state.client.timeout
         if upload:
             timeout = httpx.Timeout(120, connect=5)
-        elif path.startswith("auth/password-reset") or path.startswith("admin/") or path.endswith("/references/discover"):
+        elif path in {"auth/register", "auth/login"} or path.startswith("auth/password-reset") or path.startswith("admin/") or path.endswith("/references/discover"):
             timeout = httpx.Timeout(14, connect=5)
         elif path.endswith("/jobs"):
             timeout = httpx.Timeout(15, connect=5)
@@ -235,6 +239,8 @@ async def proxy(request: Request, path: str) -> Response:
         )
         upstream_response = await app.state.client.send(outbound, stream=stream)
     except httpx.HTTPError as exc:
+        logging.getLogger(__name__).warning("Upstream transport failure request_id=%s service=%s error=%s",
+                                            request_id(request), urlsplit(upstream).hostname, type(exc).__name__)
         raise unavailable() from exc
 
     result_headers = {name: upstream_response.headers[name] for name in (

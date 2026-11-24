@@ -7,6 +7,7 @@ import { useWorkspaceLanguage } from '../../components/workspace-language'
 import { api, errorMessage } from '../../lib/api'
 import type { DocumentItem } from './document-shelf'
 import { GeneratedContent } from './generated-content'
+import { SourceDiscovery } from './source-discovery'
 import type { CitationTarget } from './pdf-preview'
 
 type Mode = 'ASK' | 'PLAN' | 'AGENT'
@@ -18,6 +19,7 @@ const modes = [
 type Capability = 'LEARN' | 'RESEARCH' | 'WRITE'
 const tasks: Record<Capability, Record<string, string>> = {
   LEARN: {
+    socratic_tutor: 'Socratic tutor',
     answer: 'Answer',
     explanation: 'Explanation',
     study_guide: 'Study guide',
@@ -27,6 +29,7 @@ const tasks: Record<Capability, Record<string, string>> = {
   },
   RESEARCH: {
     answer: 'Answer',
+    mock_defense: 'Mock defense',
     comparison: 'Compare papers',
     screening: 'Screen papers',
     extraction: 'Extract findings',
@@ -41,21 +44,26 @@ const tasks: Record<Capability, Record<string, string>> = {
     citation_review: 'Citation review',
   },
 }
-type Objective = { query: string; document_ids: string[]; capability: Capability; task: string }
+type Objective = { draft_document_id?: string; tutor_action?: 'guide' | 'hint' | 'solution'; query: string; document_ids: string[]; capability: Capability; task: string }
+type PlanStep = { day?: number; citations?: Citation[]; step_id: string; tool: 'retrieve' | 'compose'; action: string; objective: Objective; expected_output: string }
 type Plan = {
   plan_id: string
   plan_version: number
   accepted_at: string | null
-  state: 'REVIEW' | 'ACCEPTED' | 'CANCELLED'
+  state: 'REVIEW' | 'ACCEPTED' | 'CANCELLED' | 'GENERATING' | 'FAILED'
+  generation_status?: 'ready' | 'queued' | 'running' | 'failed'
+  generation_error?: string | null
+  curriculum_days?: number | null
   objective: Objective
-  steps: { tool: string; action: string }[]
+  steps: ({ tool: string; action: string } & Partial<PlanStep>)[]
   expected_outputs: string[]
 }
 type CitationMode = 'segment' | 'chunk'
 const citationModeKey = 'aipollo.ask.citation-mode'
 
 type Citation = CitationTarget & { chunk_id: string; name: string }
-type Result = { kind?: string; claims: {
+type MatrixCell = { document_id: string; criterion: string; status: 'supported' | 'contradicted' | 'insufficient'; finding: string; citations: Citation[] }
+type Result = { defense_review?: { assessment: string; assumption: string; feedback: string; target_citations: Citation[]; counter_citations: Citation[] } | null; verified_draft?: boolean | null; evidence_matrix?: MatrixCell[] | null; budget_exhausted?: string | null; tutor_question?: string | null; kind?: string; claims: {
   text: string
   fields?: Record<string, string>
   citations: Citation[]
@@ -68,6 +76,7 @@ type Run = {
   interaction: Mode
   plan_version: number | null
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  updated_at?: string
   step: 'retrieve' | 'compose' | null
   result: Result | null
   error_code: string | null
@@ -101,7 +110,26 @@ export function InteractionPanel({
   const [mode, setMode] = useState<Mode>('ASK')
   const [citationMode, setCitationMode] = useState<CitationMode>('segment')
   const [plan, setPlan] = useState<Plan>()
+  const [features, setFeatures] = useState({ custom_plan: false, socratic_tutor: false, curriculum: false, research: false, discovery: false, mock_defense: false })
+  const [curriculumDays, setCurriculumDays] = useState(0)
+  const [selectedTask, setSelectedTask] = useState('answer')
+  useEffect(() => {
+    let current = true
+    void api<typeof features>(base + '/workflow-features').then(value => { if (current) setFeatures(value) })
+      .catch(failure => { if (current) setError(errorMessage(failure)) })
+    return () => { current = false }
+  }, [base])
+  const [workflowDraft, setWorkflowDraft] = useState<PlanStep[]>()
   const [run, setRun] = useState<Run>()
+  const [stepProgress, setStepProgress] = useState<{ step_id: string; position: number; status: string; result?: { answer?: Result } }[]>([])
+  useEffect(() => {
+    if (!run?.run_id || run.interaction !== 'PLAN') return
+    let current = true
+    void api<typeof stepProgress>(base + '/runs/' + run.run_id + '/steps')
+      .then(rows => { if (current) setStepProgress(rows) })
+      .catch(failure => { if (current) setError(errorMessage(failure)) })
+    return () => { current = false }
+  }, [base, run?.run_id, run?.updated_at, run?.interaction])
   const [activeId, setActiveId] = useState<string>()
   const [conversation, setConversation] = useState<string>()
   const [history, setHistory] = useState<Run[]>([])
@@ -116,6 +144,50 @@ export function InteractionPanel({
   const retryRunIds = useRef(new Map<string, string>())
   const queryField = useRef<HTMLTextAreaElement>(null)
   const locked = busy || activeId !== undefined || retryingId !== undefined
+  const curriculumKey = 'aipollo.curriculum.' + workspaceId
+  useEffect(() => {
+    let current = true
+    let saved: string | null = null
+    try { saved = window.sessionStorage.getItem(curriculumKey) } catch { /* Storage may be disabled. */ }
+    if (saved && /^[a-f0-9-]{36}$/.test(saved)) {
+      void api<Plan>(base + '/plans/' + saved).then(value => {
+        if (!current) return
+        setPlan(value)
+        setMode('PLAN')
+      }).catch(() => {
+        try { window.sessionStorage.removeItem(curriculumKey) } catch { /* Storage may be disabled. */ }
+      })
+    }
+    return () => { current = false }
+  }, [base, curriculumKey])
+  useEffect(() => {
+    if (!plan) return
+    try {
+      if (plan.curriculum_days && plan.state !== 'CANCELLED') window.sessionStorage.setItem(curriculumKey, plan.plan_id)
+      else window.sessionStorage.removeItem(curriculumKey)
+    } catch { /* The plan remains usable without storage. */ }
+  }, [plan, curriculumKey])
+  useEffect(() => {
+    if (!plan || plan.state !== 'GENERATING') return
+    let current = true
+    let timer: ReturnType<typeof setTimeout>
+    let delay = 1000
+    async function refresh() {
+      try {
+        const updated = await api<Plan>(base + '/plans/' + plan!.plan_id)
+        if (!current) return
+        setPlan(updated)
+        if (updated.state !== 'GENERATING') return
+      } catch (failure) {
+        if (!current) return
+        setError(errorMessage(failure))
+      }
+      delay = Math.min(delay * 1.5, 5000)
+      timer = setTimeout(() => void refresh(), delay)
+    }
+    timer = setTimeout(() => void refresh(), delay)
+    return () => { current = false; clearTimeout(timer) }
+  }, [base, plan?.plan_id, plan?.plan_version, plan?.state])
 
   useEffect(() => {
     try {
@@ -257,21 +329,30 @@ export function InteractionPanel({
       document_ids,
       capability,
       task: String(form.get('task')),
+      ...(form.get('task') === 'mock_defense' ? { draft_document_id: String(form.get('draft_document_id')) } : {}),
     }
     if (input.query.length < 2 || !input.document_ids.length || input.document_ids.length > 100) {
       setError('Enter a question and choose between 1 and 100 sources.')
       return
     }
+    if (mode !== 'ASK' && features.research && input.capability === 'RESEARCH'
+      && ['comparison', 'evidence_table', 'synthesis'].includes(input.task)
+      && (input.document_ids.length < 2 || input.document_ids.length > 5)) {
+      setError(text('Choose 2–5 papers for in-depth comparison.', 'Chọn 2–5 bài báo để so sánh chuyên sâu.'))
+      return
+    }
+    const curriculum_days = mode === 'PLAN' && features.curriculum && input.capability === 'LEARN'
+      && input.task === 'study_guide' && curriculumDays > 0 ? curriculumDays : undefined
     void perform(async () => {
       if (editing && plan) {
         const revised = await api<Plan>(base + '/plans/' + plan.plan_id, 'PATCH', {
-          ...input,
+          ...input, curriculum_days,
           expected_version: plan.plan_version,
         })
         setPlan(revised)
         setEditing(false)
       } else if (mode === 'PLAN') {
-        const created = await api<Plan>(base + '/plans', 'POST', input, crypto.randomUUID())
+        const created = await api<Plan>(base + '/plans', 'POST', { ...input, curriculum_days }, crypto.randomUUID())
         setPlan(created)
         if (queryField.current && queryField.current === element.elements.namedItem('query')) queryField.current.value = ''
       } else {
@@ -330,6 +411,7 @@ export function InteractionPanel({
   }
 
   function newChat() {
+    try { window.sessionStorage.removeItem(curriculumKey) } catch { /* Storage may be disabled. */ }
     setConversation(undefined)
     setRun(undefined)
     setHistory([])
@@ -370,10 +452,34 @@ export function InteractionPanel({
             </li>)}
           </ol>
         </section>}
+        {item.result?.defense_review && <section className="run-card form-stack" aria-label={text('Mock defense review', 'Nhận xét phản biện')}>
+          <p><strong>{item.result.defense_review.assessment.replaceAll('_', ' ')}</strong></p>
+          <p>{text('Assumption to defend', 'Giả định cần bảo vệ')}: {item.result.defense_review.assumption}</p>
+          {!!item.result.defense_review.feedback && <p>{item.result.defense_review.feedback}</p>}
+          <div>{text('Passage under review', 'Đoạn đang được phản biện')}: {item.result.defense_review.target_citations.map(citation => <button type="button" className="citation-pill" key={citation.chunk_id} onClick={() => onCitation(citation)}>{citation.name}, page {citation.page}</button>)}</div>
+          {!!item.result.defense_review.counter_citations.length && <div>{text('Counter evidence', 'Bằng chứng đối chiếu')}: {item.result.defense_review.counter_citations.map(citation => <button type="button" className="citation-pill" key={citation.chunk_id} onClick={() => onCitation(citation)}>{citation.name}, page {citation.page}</button>)}</div>}
+        </section>}
+        {item.result?.verified_draft && !!item.result.claims.length && <p className="badge badge-success">{text('Draft evidence checked · review before saving', 'Đã kiểm tra bằng chứng · xem nháp trước khi lưu')}</p>}
+        {item.result?.tutor_question && <p className="source-excerpt">{item.result.tutor_question}</p>}
+        {item.result?.kind === 'socratic_tutor' && <div className="actions">
+          {(['hint', 'solution'] as const).map(action => <button key={action} type="button" className="secondary sm" disabled={locked}
+            onClick={() => void perform(async () => {
+              const objective: Objective = {
+                query: action === 'hint' ? text('Give me a smaller hint for the previous question.', 'Cho tôi gợi ý nhỏ hơn cho câu hỏi trước.') : text('Explain the solution with sources.', 'Giải thích lời giải kèm nguồn.'),
+                document_ids: item.objective?.document_ids ?? selectedSources,
+                capability: 'LEARN', task: 'socratic_tutor', tutor_action: action,
+              }
+              begin({ ...await submitRun('ASK', objective, item.conversation_id ?? undefined), query: objective.query })
+            })}>{action === 'hint' ? text('More hints', 'Gợi ý thêm') : text('Show solution', 'Xem lời giải')}</button>)}
+        </div>}
         {item.status === 'cancelled' && <p role="status">Run cancelled.</p>}
         {(item.error_code || retryPending) && <div className="ask-run-error">
           <p role={retryPending ? 'status' : 'alert'}><DesignIcon name="error" /> {retryPending
-            ? 'Retrying…' : item.error_code === 'invalid_model_output' ? text('The model returned an invalid answer. Try again.', 'Mô hình trả lời sai định dạng hoặc trích dẫn. Hãy thử lại.') : `Run failed. ${item.error_code?.replaceAll('_', ' ')}.`}</p>
+            ? 'Retrying…' : item.error_code === 'invalid_model_output'
+              ? text('The model returned an invalid answer. Try again.', 'Mô hình trả lời sai định dạng hoặc trích dẫn. Hãy thử lại.')
+              : item.error_code === 'interaction_unavailable' && item.retryable
+                ? text('The AI provider is currently unavailable. You can retry this question.', 'Dịch vụ AI hiện không khả dụng. Bạn có thể thử lại câu hỏi này.')
+                : `Run failed. ${item.error_code?.replaceAll('_', ' ')}.`}</p>
           {(retryPending || (item.interaction === 'ASK' && item.retryable && item.objective && item.conversation_id)) &&
             <button type="button" className="secondary sm ask-retry" aria-label="Retry" title="Retry"
               aria-busy={retryPending} disabled={locked} onClick={() => void retry(original.run_id, item)}>
@@ -381,6 +487,20 @@ export function InteractionPanel({
             </button>}
         </div>}
         {retryErrors[original.run_id] && item.error_code && <p role="alert">{retryErrors[original.run_id]}</p>}
+        {item.result?.budget_exhausted && <p role="status">{text('The run reached its budget. Verified findings are shown; incomplete cells are marked.', 'Đã hết ngân sách lượt chạy. Các kết quả đã kiểm tra được giữ lại; ô còn thiếu được đánh dấu.')}</p>}
+        {features.discovery && item.result && (item.result.insufficient_evidence || item.result.evidence_matrix?.some(cell => cell.status === 'insufficient')) &&
+          <SourceDiscovery key={item.run_id} base={base} query={item.query ?? ''} canSave={canPublish} />}
+        {item.result?.evidence_matrix && <div className="table-scroll" tabIndex={0} role="region" aria-label={text('Evidence matrix', 'Ma trận bằng chứng')}>
+          <table><caption>{text('Evidence by paper and criterion', 'Bằng chứng theo bài báo và tiêu chí')}</caption>
+            <thead><tr><th>{text('Paper', 'Bài báo')}</th><th>{text('Criterion', 'Tiêu chí')}</th><th>{text('Finding', 'Kết quả')}</th><th>{text('Status and sources', 'Trạng thái và nguồn')}</th></tr></thead>
+            <tbody>{item.result.evidence_matrix.map(cell => <tr key={cell.document_id + ':' + cell.criterion}>
+              <th scope="row">{documents.find(doc => doc.document_id === cell.document_id)?.name ?? text('Unavailable source', 'Nguồn không còn khả dụng')}</th>
+              <td>{cell.criterion}</td><td>{cell.status === 'contradicted' && text('Refuted statement: ', 'Nhận định bị bác bỏ: ')}{cell.finding || text('Not enough evidence', 'Chưa đủ bằng chứng')}</td>
+              <td>{cell.status}{cell.citations.map(citation => <button type="button" className="citation-pill" key={citation.chunk_id}
+                onClick={() => onCitation(citation)}>{citation.name}, page {citation.page}</button>)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
         {item.result?.insufficient_evidence && <div className="approval-notice" role="status">
           <DesignIcon name="warning" /><div><strong>Not enough evidence in the selected sources</strong>
             <p>Choose more sources and try again.</p></div>
@@ -443,6 +563,8 @@ export function InteractionPanel({
   function editPlan(target: Plan) {
     setCapability(target.objective.capability)
     setSelectedSources(target.objective.document_ids.filter(id => documents.some(doc => doc.document_id === id)))
+    setCurriculumDays(target.curriculum_days ?? 0)
+    setSelectedTask(target.objective.task)
     setEditing(true)
   }
 
@@ -474,7 +596,7 @@ export function InteractionPanel({
             <header className="plan-heading">
               <h2 aria-label={`Plan version ${visiblePlan.plan_version}`}>{text('Proposed plan', 'Kế hoạch đề xuất')}</h2>
               <span className={`badge badge-${visiblePlan.state === 'ACCEPTED' ? 'success' : 'primary'}`}>
-                {visiblePlan.state === 'REVIEW' ? 'Ready for review' : visiblePlan.state === 'ACCEPTED' ? 'Accepted' : 'Cancelled'}
+                {visiblePlan.state === 'REVIEW' ? 'Ready for review' : visiblePlan.state === 'ACCEPTED' ? 'Accepted' : visiblePlan.state === 'GENERATING' ? text('Preparing schedule', 'Đang lập lịch học') : visiblePlan.state === 'FAILED' ? text('Draft failed', 'Chưa tạo được bản nháp') : 'Cancelled'}
               </span>
               <span className="badge badge-neutral">v{visiblePlan.plan_version}</span>
             </header>
@@ -486,14 +608,76 @@ export function InteractionPanel({
                 <li key={state} aria-current={visiblePlan.state === state ? 'step' : undefined}>{label}</li>
               ))}
             </ol>}
+            {visiblePlan.state === 'GENERATING' && <p role="status">{text('Reading the selected sources and preparing a study schedule. You can reload this page.', 'Đang đọc nguồn và lập lịch học. Bạn có thể tải lại trang.')}</p>}
+            {visiblePlan.state === 'FAILED' && <p role="alert">{visiblePlan.generation_error === 'curriculum_scope_not_found'
+              ? text('The requested topic or chapter was not found. Adjust the goal or choose other sources.', 'Không tìm thấy chủ đề hoặc chương yêu cầu. Hãy sửa mục tiêu hoặc chọn nguồn khác.')
+              : text('Could not prepare a valid schedule. Regenerate to retry.', 'Chưa tạo được lịch học hợp lệ. Chọn Tạo lại để thử lại.')}</p>}
+            {visiblePlan.curriculum_days && <p>{text('Study days', 'Số ngày học')}: {visiblePlan.curriculum_days}. {text('Starting the accepted plan creates all learning materials in order.', 'Chạy kế hoạch đã duyệt sẽ tạo lần lượt toàn bộ học liệu.')}</p>}
             <p className="plan-goal"><strong>GOAL</strong> {visiblePlan.objective.query}</p>
             <ol className="plan-steps">{visiblePlan.steps.map((step, index) => (
               <li key={index}>
                 <span className="plan-step-number">{index + 1}</span>
-                <span>{step.action}</span>
+                <span>{step.day && <strong>{text('Day', 'Ngày')} {step.day}: </strong>}{step.action}
+                  {step.objective && <small>{' · ' + tasks[step.objective.capability][step.objective.task] + ' · ' + step.objective.query}</small>}
+                  {step.objective && <small>{' · ' + step.objective.document_ids.map(id => documents.find(doc => doc.document_id === id)?.name ?? 'Unavailable source').join(', ')}</small>}
+                  {step.expected_output && <small>{' · ' + step.expected_output}</small>}
+                  {step.citations?.map(citation => <button type="button" className="citation-pill" key={citation.chunk_id}
+                    onClick={() => onCitation(citation)}>{citation.name}, page {citation.page}</button>)}
+                </span>
                 <span className="badge badge-neutral">{step.tool}</span>
               </li>
             ))}</ol>
+            {workflowDraft && <form className="form-stack" onSubmit={event => {
+              event.preventDefault()
+              if (workflowDraft.some(step => !step.objective.document_ids.length)) {
+                setError(text('Choose at least one source for each activity.', 'Chọn ít nhất một nguồn cho mỗi hoạt động.'))
+                return
+              }
+              void perform(async () => {
+                const revised = await api<Plan>(base + '/plans/' + visiblePlan.plan_id, 'PATCH', {
+                  ...visiblePlan.objective, expected_version: visiblePlan.plan_version, steps: workflowDraft,
+                })
+                setPlan(revised)
+                setWorkflowDraft(undefined)
+              })
+            }}>
+              {workflowDraft.map((step, index) => <fieldset key={step.step_id} disabled={locked}>
+                <legend>{text('Activity', 'Hoạt động')} {index + 1}</legend>
+                <label>{text('Action', 'Nội dung')}
+                  <input value={step.action} required minLength={2} maxLength={600} onChange={event => setWorkflowDraft(rows => rows?.map((row, i) => i === index ? { ...row, action: event.target.value } : row))} />
+                </label>
+                <label>{text('Question', 'Câu hỏi')}
+                  <textarea value={step.objective.query} required minLength={2} maxLength={1800} onChange={event => setWorkflowDraft(rows => rows?.map((row, i) => i === index ? { ...row, objective: { ...row.objective, query: event.target.value } } : row))} />
+                </label>
+                <label>{text('Output', 'Kết quả')}
+                  <input value={step.expected_output} required minLength={2} maxLength={600} onChange={event => setWorkflowDraft(rows => rows?.map((row, i) => i === index ? { ...row, expected_output: event.target.value } : row))} />
+                </label>
+                <label>{text('Task', 'Tác vụ')}
+                  <select value={step.objective.task} onChange={event => setWorkflowDraft(rows => rows?.map((row, i) => i === index ? { ...row, objective: { ...row.objective, task: event.target.value } } : row))}>
+                    {Object.entries(tasks[step.objective.capability]).filter(([value]) => !['socratic_tutor', 'mock_defense'].includes(value)).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                </label>
+                <div role="group" aria-label={text('Sources for activity', 'Nguồn cho hoạt động') + ' ' + (index + 1)}>
+                  {visiblePlan.objective.document_ids.map(id => <label className="check-option" key={id}>
+                    <input type="checkbox" checked={step.objective.document_ids.includes(id)}
+                      aria-label={text('Activity source', 'Nguồn hoạt động') + ' ' + (index + 1) + ': ' + (documents.find(doc => doc.document_id === id)?.name ?? id)}
+                      onChange={event => {
+                        const checked = event.currentTarget.checked
+                        setWorkflowDraft(rows => rows?.map((row, i) => i === index ? { ...row, objective: { ...row.objective,
+                          document_ids: checked ? [...new Set([...row.objective.document_ids, id])] : row.objective.document_ids.filter(source => source !== id),
+                        } } : row))
+                      }} />{documents.find(doc => doc.document_id === id)?.name ?? text('Unavailable source', 'Nguồn không còn khả dụng')}
+                  </label>)}
+                </div>
+                <button type="button" className="secondary sm" disabled={workflowDraft.length === 1} onClick={() => setWorkflowDraft(rows => rows?.filter((_, i) => i !== index))}>{text('Remove activity', 'Xóa hoạt động')}</button>
+              </fieldset>)}
+              <button type="button" className="secondary sm" disabled={locked || workflowDraft.length >= 6} onClick={() => setWorkflowDraft(rows => [...(rows ?? []), {
+                step_id: crypto.randomUUID(), tool: 'compose', action: visiblePlan.objective.query,
+                objective: visiblePlan.objective, expected_output: 'Answer with source citations',
+              }])}>{text('Add activity', 'Thêm hoạt động')}</button>
+              <button disabled={locked}>{text('Save as new version', 'Lưu phiên bản mới')}</button>
+              <button type="button" className="secondary sm" onClick={() => setWorkflowDraft(undefined)}>{text('Cancel editing', 'Hủy chỉnh sửa')}</button>
+            </form>}
             <dl className="plan-details">
               <div><dt>Scope</dt><dd>{visiblePlan.objective.document_ids.map(id =>
                 documents.find(doc => doc.document_id === id)?.name ?? 'Unavailable source').join(', ')}</dd></div>
@@ -505,15 +689,29 @@ export function InteractionPanel({
               <button type="button" className="secondary sm" disabled={locked} onClick={() => editPlan(visiblePlan)}>{text('Edit plan', 'Chỉnh sửa')}</button>
               <button type="button" className="secondary sm" disabled={locked} onClick={() => review('regenerate', visiblePlan)}>{text('Regenerate', 'Tạo lại')}</button>
               <button type="button" className="danger sm plan-cancel" disabled={locked} onClick={() => review('cancel', visiblePlan)}>{text('Cancel plan', 'Hủy kế hoạch')}</button>
-              {visiblePlan.state === 'REVIEW'
+              {(visiblePlan.state === 'REVIEW' || visiblePlan.state === 'ACCEPTED') && (visiblePlan.state === 'REVIEW'
                 ? <button type="button" className="sm" disabled={locked} onClick={() => review('accept', visiblePlan)}>{text('Accept plan', 'Duyệt kế hoạch')}</button>
-                : <button type="button" className="sm" disabled={locked} onClick={() => review('run', visiblePlan)}>{text('Run accepted plan', 'Chạy kế hoạch đã duyệt')}</button>}
+                : <button type="button" className="sm" disabled={locked} onClick={() => review('run', visiblePlan)}>{text('Run accepted plan', 'Chạy kế hoạch đã duyệt')}</button>)}
+              {features.custom_plan && visiblePlan.steps.length > 0 && <button type="button" className="secondary sm" disabled={locked} onClick={() => setWorkflowDraft(visiblePlan.steps.map(step => ({
+                day: step.day, step_id: step.step_id ?? crypto.randomUUID(), tool: step.tool as PlanStep['tool'], action: step.action,
+                objective: step.objective ?? visiblePlan.objective,
+                expected_output: step.expected_output ?? 'Answer with source citations',
+              })))}>{text('Customize activities', 'Tùy chỉnh hoạt động')}</button>}
             </div>}
           </article>
           {visiblePlan.state === 'REVIEW' && <p className="approval-notice">
             <DesignIcon name="approval-lock" /> No execution has started. Accept this exact version to enable execution. Editing creates a new version.
           </p>}
         </>}
+        {run?.interaction === 'PLAN' && stepProgress.length > 0 && <ol aria-label={text('Plan progress', 'Tiến độ kế hoạch')}>
+          {stepProgress.map(step => <li key={step.step_id}>{text('Activity', 'Hoạt động')} {step.position + 1} · {step.status}
+            {step.result?.answer?.claims.map((claim, index) => <div key={index}>
+              <GeneratedContent text={claim.text} fields={claim.fields} kind={step.result?.answer?.kind} />
+              {claim.citations.map(citation => <button type="button" key={citation.chunk_id} className="citation-pill"
+                onClick={() => onCitation(citation)}>{citation.name}, page {citation.page}</button>)}
+            </div>)}
+          </li>)}
+        </ol>}
         {run && answers(run)}
       </div>
 
@@ -533,15 +731,29 @@ export function InteractionPanel({
             <option value="segment">{text('Segment', 'Đoạn')}</option>
             <option value="chunk">{text('Chunk', 'Khối')}</option>
           </select>}
+          {effectiveMode === 'PLAN' && features.curriculum && capability === 'LEARN' && <label>
+            {text('Study schedule', 'Lịch học')}
+            <select aria-label={text('Study days', 'Số ngày học')} value={curriculumDays} disabled={locked}
+              onChange={event => { setCurriculumDays(Number(event.currentTarget.value)); if (Number(event.currentTarget.value)) setSelectedTask('study_guide') }}>
+              <option value={0}>{text('Manual plan', 'Kế hoạch thủ công')}</option>
+              {[1, 2, 3, 4, 5, 6].map(day => <option value={day} key={day}>{day} {text('days (Study guide)', 'ngày (Study guide)')}</option>)}
+            </select>
+          </label>}
           <span className="badge badge-neutral composer-source-count"><DesignIcon name="source-count" /> {selectedSources.length} sources</span>
           <select aria-label="Capability" value={capability} disabled={locked}
-            onChange={event => setCapability(event.currentTarget.value as Capability)}>
+            onChange={event => { setCapability(event.currentTarget.value as Capability); setSelectedTask('answer'); setCurriculumDays(0) }}>
             <option value="LEARN">Learn</option><option value="RESEARCH">Research</option><option value="WRITE">Write</option>
           </select>
-          <select aria-label="Output" name="task" key={capability} disabled={locked}
-            defaultValue={editing && plan?.objective.capability === capability ? plan.objective.task : 'answer'}>
-            {Object.entries(tasks[capability]).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          <select aria-label="Output" name="task" disabled={locked}
+            value={['socratic_tutor', 'mock_defense'].includes(selectedTask) && effectiveMode !== 'ASK' ? 'answer' : selectedTask}
+            onChange={event => setSelectedTask(event.currentTarget.value)}>
+            {Object.entries(tasks[capability]).filter(([value]) => (value !== 'socratic_tutor' || (features.socratic_tutor && effectiveMode === 'ASK')) && (value !== 'mock_defense' || (features.mock_defense && effectiveMode === 'ASK'))).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
+          {selectedTask === 'mock_defense' && effectiveMode === 'ASK' && <label>{text('Draft to review', 'Bản nháp cần phản biện')}
+            <select name="draft_document_id" aria-label={text('Draft to review', 'Bản nháp cần phản biện')} required disabled={locked}>
+              {selectedSources.map(id => <option value={id} key={id}>{documents.find(doc => doc.document_id === id)?.name ?? id}</option>)}
+            </select>
+          </label>}
           <details className="composer-mobile-sources">
             <summary>{text('Choose sources', 'Chọn nguồn')}</summary>
             {documents.map(doc => <label className="check-option" key={doc.document_id}>

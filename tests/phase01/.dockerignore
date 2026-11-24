@@ -6,3 +6,6 @@
 !ui.config.ts
 !ui.spec.ts
 !ui-gateway.mjs
+
+!live-session.ts
+!live-session.spec.ts

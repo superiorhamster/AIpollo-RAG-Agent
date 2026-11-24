@@ -1524,3 +1524,7 @@ ol.plan-steps li .badge, .run-stages li .badge { margin-left: auto; }
   .aipollo-account { gap: 6px; }
   .workspace-language button { padding-inline: 4px; }
 }
+
+.table-scroll { max-width: 100%; overflow-x: auto; }
+.table-scroll table { min-width: 38rem; width: 100%; text-align: left; }
+.table-scroll th, .table-scroll td { padding: .5rem; vertical-align: top; overflow-wrap: anywhere; }

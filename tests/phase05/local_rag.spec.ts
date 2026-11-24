@@ -1,18 +1,19 @@
+import { sessionRequests, waitForIndex } from './live-session'
 import { randomUUID } from 'node:crypto'
 import { expect, test } from '@playwright/test'
 
-type Job = { kind: string; status: string }
 type Evidence = { document_id: string; page: number; text: string }
 type Claim = { text: string; citations: {
   document_id: string; chunk_id: string; region?: number[] | null; citation_id?: string; segment_ids?: string[] | null; regions?: number[][]
 }[] }
-type Run = { run_id: string; conversation_id: string; status: string; error_code?: string; result: { insufficient_evidence: boolean; claims: Claim[] } }
+type Run = { run_id: string; conversation_id: string; status: string; error_code?: string; result: { tutor_question?: string | null; insufficient_evidence: boolean; claims: Claim[] } }
 
 test('real Vietnamese PDF indexing, scoped search, grounded Ask follow-up and citation navigation', async ({ page, baseURL }) => {
-  const indexTimeout = (Number(process.env.LOCAL_RAG_PARSE_SECONDS ?? 300) + 150) * 1000
+  const indexTimeout = (Number(process.env.LOCAL_RAG_INDEX_SECONDS ?? 1800) + 30) * 1000
   const runTimeout = (Number(process.env.LOCAL_RAG_RUN_SECONDS ?? 210) + 30) * 1000
-  test.setTimeout(indexTimeout + runTimeout * 2 + 60000)
+  test.setTimeout(indexTimeout + runTimeout * 8 + 60000)
   const origin = baseURL!
+  const authed = sessionRequests(page.request, origin)
   const switchMode = process.env.EXPECT_CITATION_MODE_SWITCH === '1'
   const narrow = process.env.EXPECT_MULTILINE_CITATION === '1'
   await page.setContent(`<!doctype html><html lang="vi"><meta charset="utf-8"><style>
@@ -33,29 +34,23 @@ test('real Vietnamese PDF indexing, scoped search, grounded Ask follow-up and ci
   await page.getByLabel('Password', { exact: true }).fill('LiveTest12!')
   const loginResponse = page.waitForResponse(response => response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/v1/auth/login')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click({ timeout: 20000 })
   expect((await loginResponse).status()).toBe(200)
   await expect(page).toHaveURL(/\/workspaces$/, { timeout: 20000 })
   const headers = { Origin: origin, 'Idempotency-Key': randomUUID() }
-  const created = await page.request.post('/v1/workspaces', { headers, data: { name: 'Synthetic live embedding verification' } })
+  const created = await authed.post('/v1/workspaces', { headers, data: { name: 'Synthetic live embedding verification' } })
   expect(created.status()).toBe(201)
   const workspace = (await created.json()).workspace_id
   const path = `/v1/workspaces/${workspace}`
   try {
-    const uploaded = await page.request.post(path + '/documents', {
+    const uploaded = await authed.post(path + '/documents', {
       headers: { ...headers, 'Idempotency-Key': randomUUID(), 'X-Filename': 'local-vietnamese.pdf', 'Content-Type': 'application/octet-stream' },
       data: pdf, timeout: 135000,
     })
     expect(uploaded.status()).toBe(201)
     const document = (await uploaded.json()).document_id
-    let jobs: Job[] = []
-    await expect.poll(async () => {
-      const response = await page.request.get(path + `/documents/${document}/jobs`, { timeout: 20000 })
-      expect(response.status()).toBe(200)
-      jobs = await response.json()
-      return jobs.find(j => j.kind === 'index')?.status
-    }, { timeout: indexTimeout, intervals: [2000], message: 'Vietnamese PDF should be indexed with the real local model' }).toBe('succeeded')
-    const searched = await page.request.post(path + '/search', {
+    const jobs = await waitForIndex(() => authed.get(path + `/documents/${document}/jobs`, { timeout: 20000 }), indexTimeout)
+    const searched = await authed.post(path + '/search', {
       headers: { Origin: origin }, timeout: 135000, data: { query: 'Phòng demo cần mang bộ chuyển gì?', document_ids: [document] },
     })
     expect(searched.status()).toBe(200)
@@ -79,7 +74,7 @@ test('real Vietnamese PDF indexing, scoped search, grounded Ask follow-up and ci
       const started = await response.json()
       let finished: Run | undefined
       await expect.poll(async () => {
-        const result = await page.request.get(path + '/runs/' + started.run_id, { timeout: 20000 })
+        const result = await authed.get(path + '/runs/' + started.run_id, { timeout: 20000 })
         expect(result.status()).toBe(200)
         finished = await result.json() as Run
         return !!finished && ['succeeded', 'failed', 'cancelled'].includes(finished.status)
@@ -106,7 +101,7 @@ test('real Vietnamese PDF indexing, scoped search, grounded Ask follow-up and ci
       preciseCitationId = precise?.citation_id
       expectedHighlightCount = precise?.regions?.length ?? 0
       if (narrow) expect(expectedHighlightCount).toBeGreaterThan(1)
-      const saved = await page.request.get(path + '/conversations/' + followup.conversation_id)
+      const saved = await authed.get(path + '/conversations/' + followup.conversation_id)
       expect(saved.status()).toBe(200)
       const history = await saved.json() as Run[]
       expect(history.find(run => run.run_id === followup.run_id)?.result).toEqual(followup.result)
@@ -123,9 +118,9 @@ test('real Vietnamese PDF indexing, scoped search, grounded Ask follow-up and ci
       expect(chunkAnchors.length).toBeGreaterThan(0)
       expect(chunkAnchors.every(anchor => anchor.segment_ids === null && !anchor.regions)).toBeTruthy()
       expect(chunkAnchors.some(anchor => anchor.region?.length === 4)).toBeTruthy()
-      const currentJobs = await page.request.get(path + `/documents/${document}/jobs`)
+      const currentJobs = await authed.get(path + `/documents/${document}/jobs`)
       expect(await currentJobs.json()).toEqual(jobs)
-      const saved = await page.request.get(path + '/conversations/' + first.conversation_id)
+      const saved = await authed.get(path + '/conversations/' + first.conversation_id)
       const history = await saved.json() as Run[]
       for (const original of [first, followup]) {
         expect(history.find(item => item.run_id === original.run_id)?.result).toEqual(original.result)
@@ -161,10 +156,93 @@ test('real Vietnamese PDF indexing, scoped search, grounded Ask follow-up and ci
       await expect(page.locator('.citation-highlight')).toHaveCount(1)
       await expect(page.locator('.citation-highlight')).toBeVisible()
     }
+    await test.step('Socratic guide, hint and solution', async () => {
+      let tutorConversation: string | undefined
+      for (const [action, question] of [
+        ['guide', 'Hãy hướng dẫn tôi tự tính hạn đăng ký mượn bộ chuyển trước buổi demo.'],
+        ['hint', 'Tôi nghĩ demo lúc 14:00 thì đăng ký lúc 14:30, cho tôi một gợi ý.'],
+        ['solution', 'Cho tôi xem lời giải, cần đăng ký chậm nhất mấy giờ?'],
+      ] as const) {
+        const submitted = await authed.post(path + '/runs', {
+          headers: { Origin: origin, 'Idempotency-Key': randomUUID() },
+          data: { mode: 'ASK', conversation_id: tutorConversation,
+            objective: { query: question, capability: 'LEARN', task: 'socratic_tutor', tutor_action: action, document_ids: [document] } },
+        })
+        expect(submitted.status()).toBe(202)
+        const id = (await submitted.json()).run_id
+        let tutor: Run | undefined
+        await expect.poll(async () => {
+          const response = await authed.get(path + '/runs/' + id, { timeout: 20000 })
+          expect(response.status()).toBe(200)
+          tutor = await response.json() as Run
+          return ['succeeded', 'failed', 'cancelled'].includes(tutor.status)
+        }, { timeout: runTimeout, intervals: [1000] }).toBeTruthy()
+        expect(tutor?.status, JSON.stringify({ status: tutor?.status, error_code: tutor?.error_code })).toBe('succeeded')
+        if (!tutor) throw new Error('Tutor returned no terminal result')
+        if (tutorConversation) expect(tutor.conversation_id).toBe(tutorConversation)
+        tutorConversation = tutor.conversation_id
+        if (action === 'solution') {
+          expect(tutor.result.tutor_question).toBeNull()
+          expect(tutor.result.claims.map(claim => claim.text).join(' ')).toMatch(/13\s*(?::|h|giờ)\s*30/)
+          expect(tutor.result.claims.some(claim => claim.citations.some(cite => cite.document_id === document))).toBeTruthy()
+        } else {
+          expect(tutor.result.tutor_question?.length).toBeGreaterThan(1)
+        }
+      }
+    }).catch(error => { expect.soft(false, String(error)).toBe(true) })
+    const planObjective = { query: 'Giải thích yêu cầu mượn bộ chuyển trước buổi demo.', capability: 'LEARN', task: 'explanation', document_ids: [document] }
+    const steps = ['retrieve', 'compose'].map(tool => ({ step_id: randomUUID(), tool, action: tool === 'retrieve' ? 'Đọc quy định mượn thiết bị' : 'Giải thích quy định với trích dẫn',
+      objective: planObjective, expected_output: 'Giải thích có căn cứ từ tài liệu' }))
+    const planned = await authed.post(path + '/plans', { headers: { Origin: origin, 'Idempotency-Key': randomUUID() }, data: { ...planObjective, steps } })
+    expect(planned.status()).toBe(201)
+    const plan = await planned.json()
+    expect(plan.steps).toEqual(steps)
+    const accepted = await authed.post(path + '/plans/' + plan.plan_id + '/accept', {
+      headers: { Origin: origin, 'Idempotency-Key': randomUUID() }, data: { plan_version: plan.plan_version },
+    })
+    expect(accepted.status()).toBe(200)
+    const executing = await authed.post(path + '/runs', {
+      headers: { Origin: origin, 'Idempotency-Key': randomUUID() }, data: { mode: 'PLAN', plan_id: plan.plan_id, plan_version: plan.plan_version },
+    })
+    expect(executing.status()).toBe(202)
+    const planRun = (await executing.json()).run_id
+    let planResult: Run | undefined
+    await expect.poll(async () => {
+      const response = await authed.get(path + '/runs/' + planRun, { timeout: 20000 })
+      expect(response.status()).toBe(200)
+      planResult = await response.json() as Run
+      return ['succeeded', 'failed', 'cancelled'].includes(planResult.status)
+    }, { timeout: runTimeout, intervals: [1000] }).toBeTruthy()
+    expect(planResult?.status, JSON.stringify({ status: planResult?.status, error_code: planResult?.error_code })).toBe('succeeded')
+    const progress = await authed.get(path + '/runs/' + planRun + '/steps')
+    expect(progress.status()).toBe(200)
+    expect((await progress.json()).map((step: { status: string }) => step.status)).toEqual(['succeeded', 'succeeded'])
+    const curriculum = await authed.post(path + '/plans', {
+      headers: { Origin: origin, 'Idempotency-Key': randomUUID() },
+      data: { query: 'Trong 3 ngày hãy học quy định tổ chức buổi demo và mượn thiết bị trong tài liệu.',
+        capability: 'LEARN', task: 'study_guide', document_ids: [document], curriculum_days: 3 },
+    })
+    expect(curriculum.status()).toBe(201)
+    const draft = await curriculum.json()
+    const draftPath = path + '/plans/' + draft.plan_id
+    expect(draft.state).toBe('GENERATING')
+    expect((await authed.post(draftPath + '/accept', {
+      headers: { Origin: origin, 'Idempotency-Key': randomUUID() }, data: { plan_version: 1 },
+    })).status()).toBe(409)
+    let schedule: { state: string; generation_error?: string; steps: { day: number; citations: { document_id: string; page: number }[] }[] } | undefined
+    await expect.poll(async () => {
+      const response = await authed.get(draftPath)
+      expect(response.status()).toBe(200)
+      schedule = await response.json()
+      return schedule?.state !== 'GENERATING'
+    }, { timeout: runTimeout, intervals: [1000] }).toBeTruthy()
+    expect(schedule?.state, JSON.stringify({ error: schedule?.generation_error })).toBe('REVIEW')
+    expect([...new Set(schedule!.steps.map(step => step.day))]).toEqual([1, 2, 3])
+    expect(schedule!.steps.every(step => step.citations.length && step.citations.every(c => c.document_id === document && c.page >= 1))).toBeTruthy()
     console.log('LIVE_VERIFICATION', JSON.stringify({ workspace, document, index_status: 'succeeded',
       evidence_count: search.evidence.length, highlight_count: expectedHighlightCount, first_run: first.run_id, followup_run: followup.run_id, citation_page: number }))
   } finally {
-    const cleanup = await page.request.delete(path, { headers: { Origin: origin } })
+    const cleanup = await authed.delete(path, { headers: { Origin: origin } })
     expect(cleanup.status()).toBe(202)
   }
 })

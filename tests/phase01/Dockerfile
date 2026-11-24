@@ -5,5 +5,5 @@ WORKDIR /tests
 USER pwuser
 COPY --chown=pwuser:pwuser package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
-COPY --chown=pwuser:pwuser playwright.config.ts workspace.spec.ts ui.config.ts ui.spec.ts ui-gateway.mjs ./
+COPY --chown=pwuser:pwuser live-session.ts live-session.spec.ts playwright.config.ts workspace.spec.ts ui.config.ts ui.spec.ts ui-gateway.mjs ./
 CMD ["pnpm", "test"]

@@ -1,3 +1,6 @@
+[dependency-groups]
+test = ["httpx==0.28.1"]
+
 [project]
 name = "auth-service"
 version = "0.1.0"

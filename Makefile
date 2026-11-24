@@ -97,3 +97,15 @@ production-env:
 
 production-check:
 	@set -o pipefail && $(PRODUCTION_COMPOSE) config --format json | python3 scripts/production-config.py
+
+.PHONY: verify-formulas
+verify-formulas: env
+	@bash scripts/verify-formulas.sh
+
+.PHONY: verify-agentic-research
+verify-agentic-research: env
+	@LOCAL_RAG_SCENARIO=research bash scripts/verify-local-rag.sh
+
+.PHONY: verify-smoke
+verify-smoke: env
+	@bash scripts/verify-smoke.sh

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "reviewed_by": null,
+  "cases": [
+    {"id": "energy", "family": "superscript", "page": 1, "formula": "E = m c²", "units": ["J", "kg", "m/s"], "description": "E in J; m in kg; c in m/s."},
+    {"id": "area", "family": "superscript", "page": 2, "formula": "A = π r²", "units": ["m²"], "description": "A in m²; r in m; r > 0."},
+    {"id": "indexed", "family": "subscript", "page": 3, "formula": "aᵢ = xᵢ + yᵢ", "units": ["dimensionless"], "description": "All variables are dimensionless; i is the index."},
+    {"id": "speed", "family": "linear", "page": 4, "formula": "v = d / t", "units": ["m/s", "seconds"], "description": "v in m/s; d in m; t in seconds; t > 0."},
+    {"id": "integral", "family": "integral", "page": 5, "formula": "∫₀¹ x² dx = 1/3", "units": ["dimensionless"], "description": "x and the integral are dimensionless; integrate from 0 to 1."}
+  ]
+}

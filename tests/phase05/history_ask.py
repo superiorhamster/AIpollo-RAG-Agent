@@ -74,7 +74,7 @@ class InMemoryRuns:
                         if row["workspace_id"] == params["workspace"] and row["user_id"] == params["user"]
                         and row["conversation_id"] == params["conversation"] and row["status"] == "succeeded"
                         and row["created_at"] < params["created"]]
-            return [(row["input"]["query"], [item["text"] for item in row["result"]["claims"]])
+            return [(row["input"]["query"], [item["text"] for item in row["result"]["claims"]], row["result"].get("tutor_question"))
                     for row in matching[:6]]
         if "SET status=:status" in sql:
             row = next(row for row in self.rows if row["run_id"] == params["run"])
@@ -274,6 +274,89 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
             await worker.compose(self.new_run(Q1), [SCHEDULE], [], 1)
         self.assertEqual(caught.exception.code, "cost_limit")
         worker.complete.assert_not_called()
+    async def test_socratic_three_turns_keep_questions_and_current_citations(self):
+        questions = ["Em tính hạn đăng ký như thế nào?", "Nếu phải sớm 30 phút thì em trừ hay cộng?", None]
+        packed_history = []
+        def upstream(request):
+            if request.url.host == 'workspace-service':
+                return httpx.Response(200)
+            payload = json.loads(request.content)
+            if request.url.host == 'retrieval-service':
+                return httpx.Response(200, json={'evidence': [SCHEDULE]})
+            content = json.loads(payload['messages'][1]['content'])
+            if 'question' in content:
+                return httpx.Response(200, json={'text': json.dumps({'query': content['question']})})
+            packed_history.append(content['history'])
+            question = questions[len(packed_history)-1]
+            return httpx.Response(200, json={'text': json.dumps({'question': question, 'claims': [claim('Buổi demo lúc 14:00.', SCHEDULE)]})})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            worker = Worker(self.database, client)
+            for action, query in [('guide', 'Tôi nên đăng ký lúc nào?'), ('hint', 'Tôi nghĩ cộng thêm 30 phút.'), ('solution', 'Cho tôi xem lời giải.')]:
+                run = self.new_run(query)
+                run['input'].update(task='socratic_tutor', tutor_action=action, citation_mode='segment')
+                await worker.execute(run)
+                self.assertEqual(run['status'], 'succeeded', run.get('error'))
+                self.assertEqual(run['result']['claims'][0]['citations'], [SCHEDULE])
+        self.assertEqual(packed_history[0], [])
+        self.assertIn(questions[0], packed_history[1][0]['answer'])
+        self.assertIn('cộng thêm', packed_history[2][-1]['question'])
+        self.assertIsNone(run['result']['tutor_question'])
+
+    async def test_structured_candidates_preserve_cited_siblings_and_abstain_without_evidence(self):
+        def upstream(request):
+            if request.url.host == 'retrieval-service':
+                return httpx.Response(200, json={'evidence': [SCHEDULE]})
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            for valid in (True, False):
+                run = self.new_run('Compare the reported schedule and dataset', new_thread=True)
+                run['input'].update(task='comparison', capability='RESEARCH')
+                candidate = {'text': 'Dataset not provided.', 'evidence': []}
+                with self.assertRaises(ValueError):
+                    GeneratedAnswer.model_validate({'claims': [candidate]})
+                worker = Worker(self.database, client)
+                claims = [claim('The demo begins at 14:00.', SCHEDULE)] if valid else []
+                worker.complete = AsyncMock(return_value=json.dumps({'claims': [*claims, candidate]}))
+                await worker.execute(run)
+                self.assertEqual(run['status'], 'succeeded', run.get('error'))
+                self.assertEqual(worker.complete.await_count, 1)
+                self.assertEqual(run['result']['insufficient_evidence'], not valid)
+                self.assertEqual(len(run['result']['claims']), int(valid))
+                if valid:
+                    self.assertEqual(run['result']['claims'][0]['citations'], [SCHEDULE])
+
+    async def test_structured_candidates_reject_unknown_source_ids(self):
+        def upstream(request):
+            if request.url.host == 'retrieval-service':
+                return httpx.Response(200, json={'evidence': [SCHEDULE]})
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            run = self.new_run(Q1, new_thread=True)
+            run['input'].update(task='comparison', capability='RESEARCH')
+            worker = Worker(self.database, client)
+            worker.complete = AsyncMock(return_value=json.dumps({'claims': [claim('Wrong source', CHECKLIST)]}))
+            with self.assertLogs('app.worker', level='WARNING'):
+                await worker.execute(run)
+            self.assertEqual(worker.complete.await_count, 2)
+            self.assertEqual((run['status'], run['error']), ('failed', 'invalid_model_output'))
+
+    async def test_invalid_tutor_question_receives_one_specific_repair(self):
+        def upstream(request):
+            if request.url.host == 'retrieval-service':
+                return httpx.Response(200, json={'evidence': [SCHEDULE]})
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            run = self.new_run(Q1, new_thread=True)
+            run['input'].update(task='socratic_tutor', tutor_action='guide')
+            worker = Worker(self.database, client)
+            worker.complete = AsyncMock(return_value=json.dumps({'claims': [], 'question': None}))
+            with self.assertLogs('app.worker', level='WARNING') as logs:
+                await worker.execute(run)
+            self.assertEqual(worker.complete.await_count, 2)
+            self.assertIn('Return one nonempty guiding question', worker.complete.await_args_list[1].args[1])
+            self.assertIn('rule=question', ' '.join(logs.output))
+            self.assertEqual((run['status'], run['error']), ('failed', 'invalid_model_output'))
+
     async def test_generation_repair_validates_envelope_uuid_and_provenance(self):
         good = json.dumps({"claims": [claim("14:00 thứ Sáu.", SCHEDULE)]})
         invalid = [
@@ -297,6 +380,26 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(worker.complete.await_count, 2)
                 self.assertEqual(run['status'], 'succeeded', run.get('error'))
                 self.assertEqual(run['result']['claims'][0]['citations'], [SCHEDULE])
+
+    async def test_schema_repair_includes_safe_error_paths_without_relaxing_validation(self):
+        def upstream(request):
+            if request.url.host == 'retrieval-service':return httpx.Response(200,json={'evidence':[SCHEDULE]})
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            worker=Worker(self.database,client)
+            run=self.new_run(Q1,new_thread=True)
+            broken=json.dumps({'claims':[{'text':'private-output-sentinel','source':'document','evidence':SCHEDULE['chunk_id']}]})
+            good=json.dumps({'claims':[claim('14:00.',SCHEDULE)]})
+            worker.complete=AsyncMock(side_effect=[broken,good])
+            with self.assertLogs('app.worker',level='WARNING') as captured:await worker.execute(run)
+            self.assertEqual(run['status'],'succeeded',run.get('error'))
+            repair=worker.complete.await_args_list[1].args[1]
+            self.assertIn('list_type',repair)
+            self.assertIn('evidence',repair)
+            self.assertNotIn('private-output-sentinel',repair)
+            self.assertNotIn('private-output-sentinel',' '.join(captured.output))
+            self.assertEqual(worker.complete.await_count,2)
+            self.assertEqual(run['result']['claims'][0]['citations'],[SCHEDULE])
 
     async def test_request_citation_mode_controls_prompt_and_retrieval_opt_in(self):
         identifier = str(uuid4())

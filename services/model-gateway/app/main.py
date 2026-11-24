@@ -253,7 +253,18 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
     started = perf_counter()
     response = None
     headers = {"Authorization": "Bearer " + key, "X-Request-ID": request_id(request)}
-    body = {"model": model, "max_tokens": data.max_tokens, "messages": [item.model_dump() for item in data.messages]}
+    body = {"model": model, "max_tokens": data.max_tokens, "stream": False,
+            "messages": [item.model_dump() for item in data.messages]}
+    response_format = os.environ.get("MODEL_CHAT_RESPONSE_FORMAT", "")
+    if response_format:
+        if response_format != "json_object":
+            raise ApiError(503, "chat_model_unavailable", "The configured response format is invalid.")
+        body["response_format"] = {"type": response_format}
+    effort = os.environ.get("MODEL_CHAT_REASONING_EFFORT", "")
+    if effort:
+        if effort not in {"none", "minimal", "low", "medium", "high", "xhigh", "max"}:
+            raise ApiError(503, "chat_model_unavailable", "The configured reasoning effort is invalid.")
+        body["reasoning_effort"] = effort
     try:
         # The Ask worker waits up to 30 seconds. Bound both attempts together.
         async with asyncio.timeout(28 if data.retry_on_unavailable else None):
@@ -266,10 +277,37 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
         response.raise_for_status()
         result = response.json()
         usage = result.get("usage") or {}
-        return CompletionOutput(text=result["choices"][0]["message"]["content"],
+        choice = result["choices"][0]
+        content = choice["message"]["content"]
+        if not isinstance(content, str) or not content.strip():
+            finish = choice.get("finish_reason")
+            finish = finish if isinstance(finish, str) and finish in {"stop", "length", "tool_calls", "content_filter", "function_call"} else "unknown"
+            output_tokens = usage.get("completion_tokens")
+            details = usage.get("completion_tokens_details")
+            reasoning_tokens = details.get("reasoning_tokens") if isinstance(details, dict) else None
+            LOG.warning("Chat completion missing text request_id=%s finish_reason=%s output_tokens=%s reasoning_tokens=%s",
+                        request_id(request), finish, output_tokens if isinstance(output_tokens, int) else None,
+                        reasoning_tokens if isinstance(reasoning_tokens, int) else None)
+            raise ValueError("Provider returned no text")
+        return CompletionOutput(text=content,
                                 input_tokens=usage.get("prompt_tokens"),
                                 output_tokens=usage.get("completion_tokens"))
     except (httpx.HTTPError, TimeoutError, ValueError, KeyError, IndexError, ValidationError) as exc:
+        if response is not None and response.is_error:
+            # Error messages can echo prompts. Log only allowlisted machine-readable fields.
+            try:
+                error = response.json().get("error", {})
+                error = error if isinstance(error, dict) else {}
+            except (ValueError, AttributeError):
+                error = {}
+            code = error.get("code") or error.get("type")
+            code = code if isinstance(code, str) and code in {"context_length_exceeded", "invalid_request_error", "unsupported_parameter",
+                "invalid_value", "model_not_found", "invalid_api_key", "rate_limit_exceeded", "insufficient_quota"} else "other"
+            param = error.get("param")
+            param = param if isinstance(param, str) and param in {"messages", "max_tokens", "max_completion_tokens",
+                "response_format", "reasoning_effort", "model"} else None
+            LOG.warning("Chat rejection request_id=%s code=%s param=%s input_bytes=%s max_tokens=%s",
+                        request_id(request), code, param, sum(len(item.content.encode()) for item in data.messages), data.max_tokens)
         LOG.warning("Chat completion failure request_id=%s error=%s elapsed_ms=%.2f upstream_status=%s",
                     request_id(request), type(exc).__name__, (perf_counter() - started) * 1000,
                     response.status_code if response is not None else None)

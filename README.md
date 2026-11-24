@@ -197,7 +197,7 @@ There is no shared development admin password.
 
 ### UI regression verification
 
-`make verify-ui` builds the production web image and runs seven Chromium cases
+`make verify-ui` builds the production web image and runs nine Chromium cases
 against a synthetic gateway on an isolated Compose project. It covers registration
 confirmation/success, bilingual navigation, Retry-After, independent preview/index
 readiness, polling recovery, PDF controls and mobile layout, and exact artifact
@@ -213,6 +213,20 @@ and opens the cited PDF page. Its own test data is removed afterwards. Run one
 full verification stack at a time on resource-limited hosts; retained main-project
 volumes and queued jobs are not part of the test.
 
+### Opt-in reviewed workflows and tutoring
+
+Set `AGENTIC_WORKFLOW_ENABLED=true` and/or `AGENTIC_TUTOR_ENABLED=true` in private
+`.env`, then recreate with your existing Compose overlay and `make up`. The
+orchestration migration preserves historical plans and their approvals.
+**Customize activities** saves a new plan version with up to six source-scoped
+activities. Review and Accept that version before execution. Per-activity progress
+and cited results are available in the assistant and `GET /v1/workspaces/{id}/runs/{run}/steps`.
+**Socratic tutor** is an Ask/Learn task with **More hints** and **Show solution**
+actions. Tutor questions stay in the private conversation history.
+Feature availability comes from the authenticated `workflow-features` endpoint.
+These flags default to false. Curriculum generation and the later Agentic RAG
+milestones are tracked in `harness/build/change-20261121-agentic-rag.md`.
+
 
 ### Ask citation mode
 
@@ -227,3 +241,100 @@ See the [sentence citation guide](docs/ask-pipeline/sentence-citations.md) for t
 data flow, API and prompts, parser setup, verification commands and troubleshooting.
 The [implementation record](harness/build/change-20261122-sentence-citation-mvp.md)
 records observed model and browser results.
+
+Set `AGENTIC_CURRICULUM_ENABLED=true` alongside `AGENTIC_WORKFLOW_ENABLED=true`
+to enable source-grounded study schedules in Plan → Learn → Study guide. Choose
+1–6 study days. The draft is queued durably; reload the same tab to resume
+viewing it. Each day shows activities, expected materials and source pages.
+Missing chapters, provider failures and invalid drafts remain unaccepted; adjust
+the objective or regenerate. Accept the completed version, then start it to
+produce all materials in order for the student to use on those days. This does
+not schedule future background executions. Disabling the flag stops new draft
+generation while preserving saved plans and approved workflows.
+
+For opt-in multi-paper comparison, set `AGENTIC_RESEARCH_ENABLED=true`. Agent and
+accepted Plan research comparison/evidence-table/synthesis tasks require 2–5
+papers. Each paper receives its own search, with at most two supplementary
+searches across the run. The cited paper × criterion matrix marks missing data;
+a separate semantic check removes unsupported synthesis claims after at most
+one repair. `RESEARCH_MAX_MODEL_CALLS` (default 12),
+`RESEARCH_MAX_TOTAL_OUTPUT_TOKENS` (default 16384), and the existing time/cost
+budgets apply across retries and workflow steps. A budget stop returns verified
+partial findings. Use `RUN_MAX_OUTPUT_TOKENS=2048` for structured research output.
+Ask and historical runs retain their existing execution route. Disable the flag
+to stop routing new runs through the graph; stored results remain readable.
+This workflow stays opt-in pending the real-model coverage/support evaluation.
+
+Enable `ADAPTIVE_FLASHCARDS_ENABLED=true` to review saved flashcard artifacts
+with a private FSRS schedule. Flip a due card, then rate Again/Hard/Good/Easy
+(Quên/Khó/Nhớ/Dễ). Due times use UTC. Existing decks receive stable projected
+card IDs without changing their shared body; every user has independent state.
+Disable the flag to keep the original flashcard reader while retaining progress.
+`INTERACTIVE_CONCEPT_MAP_ENABLED=true` renders saved mind maps as accessible SVG
+concept graphs. Focus a node and press Enter/Space; choose its source page when
+multiple citations are available. Missing or revoked sources use the existing
+artifact/reader access errors. The legacy list remains available with the flag off.
+
+For a reasoning-capable compatible chat provider, optionally set
+`MODEL_CHAT_REASONING_EFFORT` to a value supported by that model (for example
+`low` or `none`). Omit it for providers that do not support the parameter. A
+completion can otherwise consume its whole output budget on reasoning and
+return no answer text. Gateway diagnostics record only finish/token metadata,
+never reasoning or answer contents. See the
+[provider parameter](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+
+Set `AGENTIC_DISCOVERY_ENABLED=true` for an editable Crossref query after missing
+internal evidence. The provider is called only after **Approve Crossref search**;
+**Save reference** is separate. Import/index full text before citing it.
+`AGENTIC_WRITING_ENABLED=true` enables verified drafts for Agent or accepted Plan
+Write → Draft. Review the cited preview before saving an artifact.
+`AGENTIC_DEFENSE_ENABLED=true` adds Ask → Research → Mock defense. Select the draft
+document, inspect the targeted passage and counter-evidence, and answer the
+reviewer's question in the private conversation. Criticism does not become a
+shared cited artifact.
+
+`make verify-formulas` generates a synthetic text-layer STEM PDF and an
+extraction report under `test-results/formula-extraction/`. It measures symbols,
+indices, units and coordinate retention. The initial corpus is explicitly
+unreviewed; a passing smoke result alone does not enable Formula Inspector.
+Variable explanations, numeric examples and charts stay gated until reviewed,
+representative cases pass. OCR remains separate.
+
+`make verify-agentic-research` runs an isolated real-model synthetic corpus with
+a dense Paper A, dataset available only in Paper B, different time units,
+conflicting Gamma results under the same protocol and an unanswerable GPU-memory question. It also
+checks verified drafts, private mock defense, generated FSRS cards and concept
+graphs. The preserved six-chunk Ask path runs on the same corpus as a baseline.
+Per-paper matrix coverage, correlated completion/embedding/search calls and
+p50/p95 timings are saved with an independent model support score under
+`test-results/rag-local-test-*/`. The small synthetic sample is a release gate
+input, not a production latency estimate or a substitute for human evaluation.
+
+For compatible chat providers that support JSON object response mode, set
+`MODEL_CHAT_RESPONSE_FORMAT=json_object`. It is omitted by default. This requests
+valid JSON; backend schema, citation and source checks still apply. Unsupported
+providers should leave it empty. See the [response format API contract](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+
+
+### Smoke test the running stack
+
+Start the normal development stack, then run:
+
+```bash
+make COMPOSE_FILES='compose.dev.yaml compose.ollama.yaml' verify-smoke
+```
+
+This Linux Docker browser runner reads `WEB_ORIGIN` from the running web container
+and checks registration/login, access renewal, protected APIs, upload/indexing,
+scoped search, the PDF reader, exact Plan acceptance/version rules, grounded Ask
+and citation navigation. It uses synthetic content on the existing stack. Its
+workspace is deleted and its session revoked; the synthetic account record remains
+because the application has no public account-deletion API. Each run uses a unique
+account. Existing users, workspaces, feature flags and provider settings are preserved.
+
+Stage results and failure screenshots/traces are saved under
+`test-results/rag-smoke-*-browser/`. Generation failure makes the command fail even
+when core checks pass. `make verify` checks local service HTTP readiness;
+`make verify-provider` separately checks actual embedding/chat calls. A router can
+advertise a model whose backend accounts are unavailable or rate-limited. Check
+that provider's available accounts/quota before changing the RAG application.

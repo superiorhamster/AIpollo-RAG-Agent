@@ -1069,7 +1069,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Objective"
+                "$ref": "#/components/schemas/PlanDefinition"
               }
             }
           }
@@ -5935,6 +5935,368 @@
           }
         ]
       }
+    },
+    "/v1/workspaces/{workspace_id}/runs/{run_id}/steps": {
+      "get": {
+        "summary": "Get Run Steps",
+        "operationId": "get_run_steps_v1_workspaces__workspace_id__runs__run_id__steps_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunStepView"
+                  },
+                  "title": "Response Get Run Steps V1 Workspaces  Workspace Id  Runs  Run Id  Steps Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/workflow-features": {
+      "get": {
+        "summary": "Workflow Features",
+        "operationId": "workflow_features_v1_workspaces__workspace_id__workflow_features_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowFeatures"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/artifacts/{artifact_id}/cards": {
+      "get": {
+        "summary": "Due Cards",
+        "operationId": "due_cards_v1_workspaces__workspace_id__artifacts__artifact_id__cards_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Artifact Id"
+            }
+          },
+          {
+            "name": "due_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Due Only"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeckView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/artifacts/{artifact_id}/cards/{card_id}/reviews": {
+      "post": {
+        "summary": "Review Card",
+        "operationId": "review_card_v1_workspaces__workspace_id__artifacts__artifact_id__cards__card_id__reviews_post",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Artifact Id"
+            }
+          },
+          {
+            "name": "card_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Card Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewCard"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -5953,6 +6315,64 @@
     "schemas": {
       "Answer": {
         "properties": {
+          "defense_review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DefenseReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verified_draft": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified Draft"
+          },
+          "evidence_matrix": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/EvidenceCell"
+                },
+                "type": "array",
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Matrix"
+          },
+          "budget_exhausted": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Exhausted"
+          },
+          "tutor_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tutor Question"
+          },
           "kind": {
             "type": "string",
             "enum": [
@@ -5962,11 +6382,13 @@
               "quiz",
               "flashcards",
               "mind_map",
+              "socratic_tutor",
               "comparison",
               "screening",
               "extraction",
               "evidence_table",
               "synthesis",
+              "mock_defense",
               "draft",
               "rewrite",
               "summary",
@@ -5996,24 +6418,6 @@
       },
       "Citation": {
         "properties": {
-          "citation_id": {
-            "type": ["string", "null"],
-            "format": "uuid"
-          },
-          "segment_ids": {
-            "type": ["array", "null"],
-            "items": {"type": "string", "format": "uuid"},
-            "minItems": 1,
-            "maxItems": 6
-          },
-          "regions": {
-            "type": ["array", "null"],
-            "items": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
-            "maxItems": 16
-          },
-          "precision": {
-            "enum": ["line", "coarse", "page", null]
-          },
           "page": {
             "type": "integer",
             "maximum": 300.0,
@@ -6058,6 +6462,82 @@
               }
             ],
             "title": "Region"
+          },
+          "citation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation Id"
+          },
+          "segment_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array",
+                "maxItems": 6,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment Ids"
+          },
+          "regions": {
+            "anyOf": [
+              {
+                "items": {
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array",
+                  "maxItems": 4,
+                  "minItems": 4
+                },
+                "type": "array",
+                "maxItems": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Regions"
+          },
+          "precision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "line",
+                  "coarse",
+                  "page"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision"
           },
           "document_id": {
             "type": "string",
@@ -6111,13 +6591,13 @@
             "title": "Citations"
           },
           "source": {
-            "default": "document",
+            "type": "string",
             "enum": [
               "document",
               "conversation"
             ],
             "title": "Source",
-            "type": "string"
+            "default": "document"
           }
         },
         "type": "object",
@@ -6189,11 +6669,13 @@
               "quiz",
               "flashcards",
               "mind_map",
+              "socratic_tutor",
               "comparison",
               "screening",
               "extraction",
               "evidence_table",
               "synthesis",
+              "mock_defense",
               "draft",
               "rewrite",
               "summary",
@@ -6201,6 +6683,63 @@
             ],
             "title": "Task",
             "default": "answer"
+          },
+          "tutor_action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "guide",
+                  "hint",
+                  "solution"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tutor Action"
+          },
+          "draft_document_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Document Id"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/WorkflowStep"
+                },
+                "type": "array",
+                "maxItems": 6,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          },
+          "curriculum_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 6.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Curriculum Days"
           },
           "expected_version": {
             "type": "integer",
@@ -6253,11 +6792,13 @@
               "quiz",
               "flashcards",
               "mind_map",
+              "socratic_tutor",
               "comparison",
               "screening",
               "extraction",
               "evidence_table",
               "synthesis",
+              "mock_defense",
               "draft",
               "rewrite",
               "summary",
@@ -6265,6 +6806,34 @@
             ],
             "title": "Task",
             "default": "answer"
+          },
+          "tutor_action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "guide",
+                  "hint",
+                  "solution"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tutor Action"
+          },
+          "draft_document_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Document Id"
           }
         },
         "type": "object",
@@ -6305,13 +6874,55 @@
             "enum": [
               "REVIEW",
               "ACCEPTED",
-              "CANCELLED"
+              "CANCELLED",
+              "GENERATING",
+              "FAILED"
             ],
             "title": "State"
           },
+          "generation_status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "queued",
+              "running",
+              "failed"
+            ],
+            "title": "Generation Status",
+            "default": "ready"
+          },
+          "generation_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Error"
+          },
+          "curriculum_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Curriculum Days"
+          },
           "steps": {
             "items": {
-              "$ref": "#/components/schemas/Step"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Step"
+                },
+                {
+                  "$ref": "#/components/schemas/WorkflowStep"
+                }
+              ]
             },
             "type": "array",
             "title": "Steps"
@@ -6342,6 +6953,18 @@
             "type": "string",
             "format": "uuid",
             "title": "Run Id"
+          },
+          "retry_of_run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of Run Id"
           },
           "interaction": {
             "type": "string",
@@ -6433,13 +7056,12 @@
                 "type": "null"
               }
             ],
-            "title": "Error Code",
-            "description": "Stable failure code. invalid_model_output means generation failed schema or current-evidence validation after one bounded regeneration; eligible failed Ask runs can be retried without changing their context."
+            "title": "Error Code"
           },
           "retryable": {
             "type": "boolean",
-            "default": false,
-            "description": "A final Ask completion returned HTTP 503 from Model Gateway."
+            "title": "Retryable",
+            "default": false
           },
           "objective": {
             "anyOf": [
@@ -6449,8 +7071,7 @@
               {
                 "type": "null"
               }
-            ],
-            "description": "The saved Ask objective, including the original document selection."
+            ]
           },
           "query": {
             "type": "string",
@@ -6465,19 +7086,6 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
-          },
-          "retry_of_run_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Retry Of Run Id"
           }
         },
         "type": "object",
@@ -6500,10 +7108,6 @@
       },
       "StartRun": {
         "properties": {
-          "citation_mode": {
-            "enum": ["segment", "chunk", null],
-            "description": "Optional for Ask. Segment uses adaptive sentence citations and chunk uses legacy citations. Omission preserves the server default. Retry preserves the original mode."
-          },
           "mode": {
             "type": "string",
             "enum": [
@@ -6562,15 +7166,29 @@
           "retry_of_run_id": {
             "anyOf": [
               {
-                "format": "uuid",
-                "type": "string"
+                "type": "string",
+                "format": "uuid"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Retry Of Run Id"
+          },
+          "citation_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "segment",
+                  "chunk"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation Mode"
           }
         },
         "type": "object",
@@ -7161,6 +7779,551 @@
           "disabled"
         ],
         "title": "AccountUpdate"
+      },
+      "PlanDefinition": {
+        "properties": {
+          "document_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Document Ids"
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 1800,
+            "minLength": 2,
+            "title": "Query"
+          },
+          "capability": {
+            "type": "string",
+            "enum": [
+              "LEARN",
+              "RESEARCH",
+              "WRITE"
+            ],
+            "title": "Capability",
+            "default": "LEARN"
+          },
+          "task": {
+            "type": "string",
+            "enum": [
+              "answer",
+              "explanation",
+              "study_guide",
+              "quiz",
+              "flashcards",
+              "mind_map",
+              "socratic_tutor",
+              "comparison",
+              "screening",
+              "extraction",
+              "evidence_table",
+              "synthesis",
+              "mock_defense",
+              "draft",
+              "rewrite",
+              "summary",
+              "citation_review"
+            ],
+            "title": "Task",
+            "default": "answer"
+          },
+          "tutor_action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "guide",
+                  "hint",
+                  "solution"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tutor Action"
+          },
+          "draft_document_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Document Id"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/WorkflowStep"
+                },
+                "type": "array",
+                "maxItems": 6,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          },
+          "curriculum_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 6.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Curriculum Days"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_ids",
+          "query"
+        ],
+        "title": "PlanDefinition"
+      },
+      "WorkflowStep": {
+        "properties": {
+          "step_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Step Id"
+          },
+          "tool": {
+            "type": "string",
+            "enum": [
+              "retrieve",
+              "compose"
+            ],
+            "title": "Tool"
+          },
+          "action": {
+            "type": "string",
+            "maxLength": 600,
+            "minLength": 2,
+            "title": "Action"
+          },
+          "objective": {
+            "$ref": "#/components/schemas/Objective"
+          },
+          "expected_output": {
+            "type": "string",
+            "maxLength": 600,
+            "minLength": 2,
+            "title": "Expected Output"
+          },
+          "day": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 6.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array",
+            "maxItems": 6,
+            "title": "Citations"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "step_id",
+          "tool",
+          "action",
+          "objective",
+          "expected_output"
+        ],
+        "title": "WorkflowStep"
+      },
+      "StepResult": {
+        "properties": {
+          "cost": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Cost"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Answer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Citation"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cost"
+        ],
+        "title": "StepResult"
+      },
+      "RunStepView": {
+        "properties": {
+          "step_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Step Id"
+          },
+          "position": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Position"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "succeeded"
+            ],
+            "title": "Status"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StepResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "step_id",
+          "position",
+          "status",
+          "result",
+          "updated_at"
+        ],
+        "title": "RunStepView"
+      },
+      "EvidenceCell": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Document Id"
+          },
+          "criterion": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 2,
+            "title": "Criterion"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "supported",
+              "contradicted",
+              "insufficient"
+            ],
+            "title": "Status"
+          },
+          "finding": {
+            "type": "string",
+            "maxLength": 800,
+            "title": "Finding"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Citations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "criterion",
+          "status",
+          "finding",
+          "citations"
+        ],
+        "title": "EvidenceCell"
+      },
+      "ReviewCard": {
+        "properties": {
+          "rating": {
+            "type": "integer",
+            "maximum": 4.0,
+            "minimum": 1.0,
+            "title": "Rating"
+          },
+          "expected_version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "rating",
+          "expected_version"
+        ],
+        "title": "ReviewCard"
+      },
+      "DefenseReview": {
+        "properties": {
+          "assessment": {
+            "type": "string",
+            "enum": [
+              "missing_citation",
+              "contradicted",
+              "unsupported_assumption",
+              "clarification"
+            ],
+            "title": "Assessment"
+          },
+          "assumption": {
+            "type": "string",
+            "maxLength": 600,
+            "minLength": 2,
+            "title": "Assumption"
+          },
+          "feedback": {
+            "type": "string",
+            "maxLength": 800,
+            "title": "Feedback"
+          },
+          "target_citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Target Citations"
+          },
+          "counter_citations": {
+            "items": {
+              "$ref": "#/components/schemas/Citation"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Counter Citations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "assessment",
+          "assumption",
+          "feedback",
+          "target_citations",
+          "counter_citations"
+        ],
+        "title": "DefenseReview"
+      },
+      "WorkflowFeatures": {
+        "properties": {
+          "custom_plan": {
+            "type": "boolean",
+            "title": "Custom Plan"
+          },
+          "socratic_tutor": {
+            "type": "boolean",
+            "title": "Socratic Tutor"
+          },
+          "curriculum": {
+            "type": "boolean",
+            "title": "Curriculum"
+          },
+          "research": {
+            "type": "boolean",
+            "title": "Research"
+          },
+          "discovery": {
+            "type": "boolean",
+            "title": "Discovery"
+          },
+          "verified_writing": {
+            "type": "boolean",
+            "title": "Verified Writing"
+          },
+          "mock_defense": {
+            "type": "boolean",
+            "title": "Mock Defense"
+          }
+        },
+        "type": "object",
+        "required": [
+          "custom_plan",
+          "socratic_tutor",
+          "curriculum",
+          "research",
+          "discovery",
+          "verified_writing",
+          "mock_defense"
+        ],
+        "title": "WorkflowFeatures"
+      },
+      "ReviewResult": {
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Card Id"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Due At"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          },
+          "rating": {
+            "type": "integer",
+            "maximum": 4.0,
+            "minimum": 1.0,
+            "title": "Rating"
+          }
+        },
+        "type": "object",
+        "required": [
+          "card_id",
+          "version",
+          "due_at",
+          "reviewed_at",
+          "rating"
+        ],
+        "title": "ReviewResult"
+      },
+      "DeckView": {
+        "properties": {
+          "cards": {
+            "items": {
+              "$ref": "#/components/schemas/DueCard"
+            },
+            "type": "array",
+            "title": "Cards"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "title": "As Of"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cards",
+          "as_of"
+        ],
+        "title": "DeckView"
+      },
+      "DueCard": {
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Card Id"
+          },
+          "front": {
+            "type": "string",
+            "title": "Front"
+          },
+          "back": {
+            "type": "string",
+            "title": "Back"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Version"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          },
+          "is_due": {
+            "type": "boolean",
+            "title": "Is Due"
+          },
+          "citations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Citations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "card_id",
+          "front",
+          "back",
+          "version",
+          "due_at",
+          "is_due",
+          "citations"
+        ],
+        "title": "DueCard"
       }
     }
   }
