@@ -22,7 +22,7 @@ Expected choices when the web app is scaffolded:
 - Tailwind CSS or an equivalent token-driven styling layer
 - TanStack Query for server-state fetching/caching
 - Zod for client boundary validation where useful
-- PDF.js / React PDF-compatible viewer for the document side panel
+- EmbedPDF Headless (`@embedpdf/react` and `@embedpdf/engine` 3.3.0, Apache-2.0) for the document side panel; local PDFium worker/WASM, private annotations owned by Document Service
 - Playwright for E2E tests
 - Vitest or the framework's supported unit-test runner
 

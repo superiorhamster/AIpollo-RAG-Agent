@@ -12,7 +12,10 @@ export default function Home() {
             <span><Localized en="Academic AI Research Workbench" vi="Không gian nghiên cứu học thuật với AI"/></span>
           </div>
 
-          <h1><Localized en="AIpollo" vi="AIpollo"/></h1>
+          <div className="hero-brand-lockup">
+            <img className="hero-brand-logo" src="/aipollo/logo.png" alt="" width={196} height={62} />
+            <h1>AIpollo</h1>
+          </div>
 
           <p className="hero-lead"><Localized en="Sign in to organize and share your academic workspaces. Verifiable multi-paper synthesis, structured planning, and direct citation navigation for researchers." vi="Đăng nhập để tổ chức và chia sẻ tài liệu học thuật, tổng hợp nhiều nguồn và kiểm chứng trích dẫn trực tiếp."/></p>
 

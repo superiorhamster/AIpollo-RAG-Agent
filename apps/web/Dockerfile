@@ -9,7 +9,6 @@ RUN pnpm install --frozen-lockfile
 
 COPY next.config.ts proxy.ts tsconfig.json ./
 COPY app/ app/
-COPY scripts/ scripts/
 COPY public/ public/
 RUN pnpm build
 

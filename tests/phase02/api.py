@@ -157,6 +157,39 @@ class DocumentLifecycle(unittest.TestCase):
             self.assertIn("no-store", response.headers["Cache-Control"])
             status(viewer.head(item + "/original"), 200)
             status(viewer.get(item + "/preview", headers={"Range": "bytes=999999-"}), 416)
+            annotations = item + "/annotations"
+            note = {"page": 1, "body": "Private synthetic note", "region": [.1,.1,.8,.2]}
+            annotation_key = str(uuid4())
+            headers = {"Idempotency-Key": annotation_key}
+            created = status(owner.post(annotations, json=note, headers=headers), 201).json()
+            self.assertEqual(created["annotation_id"], annotation_key)
+            self.assertEqual(status(owner.post(annotations, json=note, headers=headers), 201).json(), created)
+            status(owner.post(annotations, json={**note, "body": "Different"}, headers=headers), 409)
+            self.assertEqual(status(viewer.get(annotations), 200).json(), [])
+            status(outsider.get(annotations), 404)
+            status(anonymous.post(annotations, json=note), 401)
+            personal = annotations + "/" + annotation_key
+            status(viewer.patch(personal, json=note), 404)
+            status(outsider.patch(personal, json=note), 404)
+            status(viewer.delete(personal), 204)
+            self.assertEqual(len(status(owner.get(annotations), 200).json()), 1)
+            updated = {**note, "body": "Edited private note", "regions": [[.1,.1,.5,.15],[.1,.16,.8,.2]],
+                       "embedpdf": {"version": 1, "subtype": "square", "rect": {"x": 20,"y": 30,"width": 60,"height": 20}}}
+            changed = status(owner.patch(personal, json=updated), 200).json()
+            self.assertEqual(changed["body"], updated["body"])
+            self.assertEqual(changed["region"], [.1,.1,.8,.2])
+            self.assertEqual(changed["regions"], updated["regions"])
+            self.assertEqual(changed["embedpdf"]["version"], 1)
+            status(owner.patch(personal, json={**updated, "regions": [[.8,.1,.2,.3]]}), 422)
+            status(owner.post(annotations, json={**note, "embedpdf": {**updated["embedpdf"], "actions": {"JavaScript": "untrusted"}}}), 422)
+            status(owner.post(annotations, json={**note, "regions": [[0,0,1,1]]*129}), 422)
+            status(owner.post(annotations, json={"page": 1,"body": " ","region": None}), 422)
+            status(owner.delete(personal), 204)
+            self.assertEqual(status(owner.get(annotations), 200).json(), [])
+            # Viewers retain the ability to take their own private notes.
+            status(viewer.post(annotations, json=note), 201)
+            self.assertEqual(status(owner.get(annotations), 200).json(), [])
+
             initial_jobs = eventually(lambda: status(viewer.get(item + "/jobs"), 200).json())
             self.assertEqual([(job["kind"], job["status"]) for job in initial_jobs], [("index", "queued")])
 
@@ -173,6 +206,19 @@ class DocumentLifecycle(unittest.TestCase):
                     self.assertTrue(receipt.json()["routed"])
             time.sleep(1)
             self.assertEqual(status(viewer.get(item + "/jobs"), 200).json(), initial_jobs)
+            status(anonymous.post(item + "/retry"), 401)
+            status(outsider.post(item + "/retry"), 404)
+            status(viewer.post(item + "/retry"), 403)
+            status(editor.post(item + "/retry"), 409)
+            with database() as db:
+                db.execute("""
+                    UPDATE ingestion.jobs SET status='failed', attempts=1, error_code='parse_timeout'
+                    WHERE document_id=%s AND kind='index'
+                """, (entry["document_id"],))
+                db.commit()
+            retried_jobs = status(editor.post(item + "/retry"), 200).json()
+            self.assertEqual([(job["kind"], job["status"], job["error_code"]) for job in retried_jobs],
+                             [("index", "queued", None)])
             status(editor.delete(item), 202)
             status(viewer.get(item), 404)
 

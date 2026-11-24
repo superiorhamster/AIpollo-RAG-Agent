@@ -20,8 +20,7 @@ export function DesignIcon({ name }: { name: IconName }) {
 export function Brand({ href = '/workspaces' }: { href?: string }) {
   return (
     <Link className="aipollo-brand" href={href}>
-      <span className="aipollo-mark"><img src="/aipollo/logo.png" alt="" /></span>
-      <span>AIpollo</span>
+      <img className="aipollo-brand-logo" src="/aipollo/logo.png" alt="AIpollo" width={98} height={31} />
     </Link>
   )
 }
@@ -42,8 +41,9 @@ export function AuthLayout({ children, note }: { children: ReactNode; note?: Rea
   return (
     <main className="auth-layout">
       <aside className="auth-brand">
-        <Link className="auth-wordmark" href="/">AIpollo</Link>
-        <img src="/aipollo/logo.png" alt="" width={114} height={114} />
+        <Link className="auth-wordmark" href="/">
+          <img className="auth-wordmark-logo" src="/aipollo/logo.png" alt="AIpollo" width={170} height={54} />
+        </Link>
         <p className="auth-headline"><Localized en="Your academic knowledge workspace." vi="Không gian tri thức học thuật của bạn." /></p>
         <p className="auth-description"><Localized en="Learn from course materials, review literature, and write with citations you can verify." vi="Học từ tài liệu, nghiên cứu tổng quan và viết với các trích dẫn có thể kiểm chứng." /></p>
         <ul className="auth-features">

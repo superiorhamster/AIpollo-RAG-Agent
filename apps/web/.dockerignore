@@ -6,8 +6,6 @@
 !pnpm-lock.yaml
 !proxy.ts
 !tsconfig.json
-!scripts/
-!scripts/**
 
 !public/
 !public/aipollo/

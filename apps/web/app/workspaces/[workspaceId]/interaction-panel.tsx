@@ -10,7 +10,7 @@ import { GeneratedContent } from './generated-content'
 import { SourceDiscovery } from './source-discovery'
 import type { CitationTarget } from './pdf-preview'
 
-type Mode = 'ASK' | 'PLAN' | 'AGENT'
+export type Mode = 'ASK' | 'PLAN' | 'AGENT'
 const modes = [
   { value: 'ASK', label: 'Ask', vietnamese: 'Hỏi', viHint: 'Trò chuyện · hỏi đáp theo nguồn', icon: 'ask', hint: 'Chat · grounded Q&A · read-only' },
   { value: 'PLAN', label: 'Plan', vietnamese: 'Lập kế hoạch', viHint: 'Xem xét kế hoạch trước khi phê duyệt', icon: 'plan', hint: 'Review-only · nothing runs until you accept' },
@@ -87,7 +87,7 @@ type Run = {
 type Conversation = { conversation_id: string; name: string }
 
 export function InteractionPanel({
-  workspaceId, workspaceName, documents, readySources, onOpenArtifact, selectedSources, setSelectedSources, onSourcesLock, showHistory, canPublish, onCitation,
+  workspaceId, workspaceName, documents, readySources, onOpenArtifact, selectedSources, setSelectedSources, onSourcesLock, showHistory, canPublish, onCitation, requestedMode, onModeChange,
 }: {
   workspaceId: string
   workspaceName: string
@@ -100,6 +100,8 @@ export function InteractionPanel({
   showHistory: boolean
   canPublish: boolean
   onCitation: (target: CitationTarget) => void
+  requestedMode?: { mode: 'ASK' | 'PLAN'; nonce: number }
+  onModeChange?: (mode: Mode) => void
 }) {
   const base = '/v1/workspaces/' + workspaceId
   const { text } = useWorkspaceLanguage()
@@ -107,7 +109,7 @@ export function InteractionPanel({
   const [published, setPublished] = useState<string>()
   const [savedArtifacts, setSavedArtifacts] = useState<Record<string, string>>({})
   const [copied, setCopied] = useState<string>()
-  const [mode, setMode] = useState<Mode>('ASK')
+  const [mode, setMode] = useState<Mode>(requestedMode?.mode ?? 'ASK')
   const [citationMode, setCitationMode] = useState<CitationMode>('segment')
   const [plan, setPlan] = useState<Plan>()
   const [features, setFeatures] = useState({ custom_plan: false, socratic_tutor: false, curriculum: false, research: false, discovery: false, mock_defense: false })
@@ -144,6 +146,13 @@ export function InteractionPanel({
   const retryRunIds = useRef(new Map<string, string>())
   const queryField = useRef<HTMLTextAreaElement>(null)
   const locked = busy || activeId !== undefined || retryingId !== undefined
+  const lastModeNonce = useRef(requestedMode?.nonce ?? 0)
+  useEffect(() => {
+    if (!requestedMode || requestedMode.nonce === lastModeNonce.current) return
+    lastModeNonce.current = requestedMode.nonce
+    if (locked || editing) return
+    setMode(requestedMode.mode)
+  }, [requestedMode, locked, editing])
   const curriculumKey = 'aipollo.curriculum.' + workspaceId
   useEffect(() => {
     let current = true
@@ -407,6 +416,7 @@ export function InteractionPanel({
       setConversation(item.conversation_id)
       setRun(undefined)
       setMode('ASK')
+      onModeChange?.('ASK')
     })
   }
 
@@ -418,6 +428,7 @@ export function InteractionPanel({
     setPlan(undefined)
     setEditing(false)
     setMode('ASK')
+    onModeChange?.('ASK')
   }
 
   function answers(original: Run) {
@@ -723,7 +734,10 @@ export function InteractionPanel({
         <div className="composer-options">
           <div className="composer-modes" role="group" aria-label="Mode">
             {modes.map(item => <button key={item.value} type="button" disabled={editing || locked}
-              aria-pressed={effectiveMode === item.value} onClick={() => setMode(item.value)}>{text(item.label, item.vietnamese)}</button>)}
+              aria-pressed={effectiveMode === item.value} onClick={() => {
+                setMode(item.value)
+                onModeChange?.(item.value)
+              }}>{text(item.label, item.vietnamese)}</button>)}
           </div>
           {effectiveMode === 'ASK' && <select aria-label={text('Citation Mode', 'Chế độ trích dẫn')}
             value={citationMode} disabled={locked}

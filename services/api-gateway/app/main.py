@@ -69,10 +69,11 @@ WORKSPACE_SEARCH = re.compile(rf"workspaces/{UUID_PATH}/search")
 DOCUMENT_LIST = re.compile(rf"workspaces/{UUID_PATH}/documents")
 DOCUMENT_PATHS = (
     (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}/annotations"), ("GET", "POST")),
-    (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}/annotations/{UUID_PATH}"), ("DELETE",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}/annotations/{UUID_PATH}"), ("PATCH", "DELETE")),
     (DOCUMENT_LIST, ("GET", "POST")),
     (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}"), ("GET", "PATCH", "DELETE")),
     (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}/jobs"), ("GET",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}/retry"), ("POST",)),
     (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}/(?:original|preview)"), ("GET", "HEAD")),
 )
 MAX_BODY_BYTES = 16 * 1024
