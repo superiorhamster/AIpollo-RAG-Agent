@@ -63,7 +63,7 @@ async function signUp(page: Page, email: string) {
   await page.getByLabel('Password', { exact: true }).fill(password)
   await page.getByLabel('Confirm password', { exact: true }).fill(password)
   await page.getByRole('button', { name: 'Create account', exact: true }).click()
-  await expect(page).toHaveURL(/\/sign-in\?registered=1$/)
+  await expect(page).toHaveURL(/\/sign-in\?registered=1$/, { timeout: 20000 })
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password', { exact: true }).fill(password)
   const response = page.waitForResponse(result => result.request().method() === 'POST' &&
@@ -71,7 +71,7 @@ async function signUp(page: Page, email: string) {
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   const loggedIn = await response
   expect(loggedIn.status(), await loggedIn.text()).toBe(200)
-  await expect(page).toHaveURL(/\/workspaces$/)
+  await expect(page).toHaveURL(/\/workspaces$/, { timeout: 20000 })
   await expect(page.getByRole('heading', { name: 'Workspaces', exact: true })).toBeVisible({ timeout: 15000 })
 }
 

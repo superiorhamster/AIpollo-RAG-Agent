@@ -109,6 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         async with httpx.AsyncClient(
             timeout=4, trust_env=False, cookies=CookieJar(policy=RejectUpstreamCookies()),
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=3),
         ) as client:
             app.state.client = client
             yield
@@ -234,11 +235,19 @@ async def proxy(request: Request, path: str) -> Response:
             timeout = httpx.Timeout(15, connect=5)
         elif search or stream:
             timeout = httpx.Timeout(RuntimeBudgets.from_env().search_caller if search else 15, connect=5)
-        outbound = app.state.client.build_request(
-            method, f"{upstream}/v1/{path}", headers=headers, content=body,
-            timeout=timeout,
-        )
-        upstream_response = await app.state.client.send(outbound, stream=stream)
+        def build_outbound():
+            return app.state.client.build_request(
+                method, f"{upstream}/v1/{path}", headers=headers, content=body,
+                timeout=timeout,
+            )
+
+        try:
+            upstream_response = await app.state.client.send(build_outbound(), stream=stream)
+        except httpx.RemoteProtocolError:
+            if method not in ("GET", "HEAD"):
+                raise
+            # Retry once when Uvicorn closes a pooled HTTP/1.1 keep-alive connection mid-dispatch.
+            upstream_response = await app.state.client.send(build_outbound(), stream=stream)
     except httpx.HTTPError as exc:
         logging.getLogger(__name__).warning("Upstream transport failure request_id=%s service=%s error=%s",
                                             request_id(request), urlsplit(upstream).hostname, type(exc).__name__)

@@ -253,8 +253,21 @@ function Reader({
         setOpenMenuId(null)
       }
     }
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      const id = openMenuId
+      setOpenMenuId(null)
+      const trigger = rowMenuTriggerRefs.current.get(id)
+      trigger?.focus()
+      requestAnimationFrame(() => rowMenuTriggerRefs.current.get(id)?.focus())
+    }
     document.addEventListener('pointerdown', onPointerDown)
-    return () => document.removeEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
   }, [openMenuId])
   useEffect(() => {
     if (!retry && !busy) return
@@ -873,13 +886,6 @@ function Reader({
               }}
               onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
                 const menuButtons = rowMenuItemRefs.current.filter((b): b is HTMLButtonElement => Boolean(b && !b.disabled))
-                if (event.key === 'Escape') {
-                  event.preventDefault()
-                  const id = targetItem.annotation_id
-                  setOpenMenuId(null)
-                  requestAnimationFrame(() => rowMenuTriggerRefs.current.get(id)?.focus())
-                  return
-                }
                 if (!menuButtons.length) return
                 const currentIdx = menuButtons.findIndex((b) => b === document.activeElement)
                 if (event.key === 'ArrowDown') {

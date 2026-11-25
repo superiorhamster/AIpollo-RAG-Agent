@@ -158,7 +158,24 @@ export function ReaderDocumentBar({
     return () => cancelAnimationFrame(frame)
   }, [renameOpen])
 
-  // Dismiss open popovers on outside click
+  const closePicker = useCallback((returnFocus = false) => {
+    setPickerOpen(false)
+    setSearchQuery('')
+    if (returnFocus) {
+      pickerTriggerRef.current?.focus()
+      requestAnimationFrame(() => pickerTriggerRef.current?.focus())
+    }
+  }, [])
+
+  const closeMenu = useCallback((returnFocus = false) => {
+    setMenuOpen(false)
+    if (returnFocus) {
+      menuTriggerRef.current?.focus()
+      requestAnimationFrame(() => menuTriggerRef.current?.focus())
+    }
+  }, [])
+
+  // Dismiss open popovers on outside click or Escape (handles presses before focus moves into portal)
   useEffect(() => {
     if (!pickerOpen && !menuOpen) return
     const onPointerDown = (event: globalThis.PointerEvent) => {
@@ -171,20 +188,23 @@ export function ReaderDocumentBar({
         setMenuOpen(false)
       }
     }
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (pickerOpen) {
+        event.preventDefault()
+        closePicker(true)
+      } else if (menuOpen) {
+        event.preventDefault()
+        closeMenu(true)
+      }
+    }
     document.addEventListener('pointerdown', onPointerDown)
-    return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [pickerOpen, menuOpen])
-
-  const closePicker = (returnFocus = false) => {
-    setPickerOpen(false)
-    setSearchQuery('')
-    if (returnFocus) requestAnimationFrame(() => pickerTriggerRef.current?.focus())
-  }
-
-  const closeMenu = (returnFocus = false) => {
-    setMenuOpen(false)
-    if (returnFocus) requestAnimationFrame(() => menuTriggerRef.current?.focus())
-  }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [pickerOpen, menuOpen, closePicker, closeMenu])
 
   const openRenameForm = () => {
     if (!selectedDoc || annotationPending) return
@@ -233,11 +253,6 @@ export function ReaderDocumentBar({
   }
 
   function handlePickerKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      closePicker(true)
-      return
-    }
     if (!filteredDocuments.length) return
     if (event.key === 'ArrowDown') {
       event.preventDefault()
@@ -261,11 +276,6 @@ export function ReaderDocumentBar({
 
   function handleMenuKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const items = menuItemRefs.current.filter((item): item is HTMLButtonElement => Boolean(item && !item.disabled))
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      closeMenu(true)
-      return
-    }
     if (!items.length) return
     const currentIdx = items.findIndex(item => item === document.activeElement)
     if (event.key === 'ArrowDown') {
