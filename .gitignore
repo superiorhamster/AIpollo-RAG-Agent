@@ -21,6 +21,5 @@ test-results/
 .idea/
 .vscode/
 
-/apps/web/public/pdfjs/
 
 !.env.production.example

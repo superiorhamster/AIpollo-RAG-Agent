@@ -3095,6 +3095,111 @@
         }
       }
     },
+    "/v1/workspaces/{workspace_id}/documents/{document_id}/retry": {
+      "parameters": [
+        {
+          "name": "workspace_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "document_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Retry failed document processing jobs",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated document jobs with failed entries re-queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentJob"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin or workspace role denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document or workspace unavailable to the account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No failed jobs available to retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/v1/workspaces/{workspace_id}/documents/{document_id}/original": {
       "parameters": [
         {
@@ -4430,12 +4535,7 @@
               }
             }
           }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ]
+        }
       },
       "post": {
         "summary": "Annotate",
@@ -4462,11 +4562,20 @@
             }
           },
           {
-            "name": "Origin",
+            "name": "idempotency-key",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
             }
           }
         ],
@@ -4551,15 +4660,128 @@
               }
             }
           }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ]
+        }
       }
     },
     "/v1/workspaces/{workspace_id}/documents/{document_id}/annotations/{annotation_id}": {
+      "patch": {
+        "summary": "Update Annotation",
+        "operationId": "update_annotation_v1_workspaces__workspace_id__documents__document_id__annotations__annotation_id__patch",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "annotation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Annotation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnnotationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "summary": "Remove Annotation",
         "operationId": "remove_annotation_v1_workspaces__workspace_id__documents__document_id__annotations__annotation_id__delete",
@@ -4592,14 +4814,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Annotation Id"
-            }
-          },
-          {
-            "name": "Origin",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
             }
           }
         ],
@@ -4667,12 +4881,7 @@
               }
             }
           }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ]
+        }
       }
     },
     "/v1/workspaces/{workspace_id}/artifacts": {
@@ -7653,6 +7862,40 @@
             ],
             "title": "Region"
           },
+          "regions": {
+            "items": {
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array",
+              "maxItems": 4,
+              "minItems": 4
+            },
+            "type": "array",
+            "maxItems": 128,
+            "title": "Regions"
+          },
+          "embedpdf": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmbedSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "annotation_id": {
             "type": "string",
             "format": "uuid",
@@ -7664,6 +7907,7 @@
             "title": "Created At"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "page",
@@ -7712,8 +7956,43 @@
               }
             ],
             "title": "Region"
+          },
+          "regions": {
+            "items": {
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array",
+              "maxItems": 4,
+              "minItems": 4
+            },
+            "type": "array",
+            "maxItems": 128,
+            "title": "Regions"
+          },
+          "embedpdf": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmbedSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "page"
@@ -8324,6 +8603,170 @@
           "citations"
         ],
         "title": "DueCard"
+      },
+      "Box": {
+        "properties": {
+          "x": {
+            "type": "number",
+            "maximum": 1000000.0,
+            "minimum": 0.0,
+            "title": "X"
+          },
+          "y": {
+            "type": "number",
+            "maximum": 1000000.0,
+            "minimum": 0.0,
+            "title": "Y"
+          },
+          "width": {
+            "type": "number",
+            "maximum": 1000000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Width"
+          },
+          "height": {
+            "type": "number",
+            "maximum": 1000000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Height"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "title": "Box"
+      },
+      "EmbedSnapshot": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Version",
+            "default": 1
+          },
+          "subtype": {
+            "type": "string",
+            "enum": [
+              "highlight",
+              "text",
+              "square"
+            ],
+            "title": "Subtype"
+          },
+          "rect": {
+            "$ref": "#/components/schemas/Box"
+          },
+          "quadPoints": {
+            "items": {
+              "$ref": "#/components/schemas/Quad"
+            },
+            "type": "array",
+            "maxItems": 128,
+            "title": "Quadpoints"
+          },
+          "color": {
+            "type": "string",
+            "pattern": "^#[0-9a-fA-F]{6}$",
+            "title": "Color",
+            "default": "#ffcf40"
+          },
+          "opacity": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "default": 0.4
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "subtype",
+          "rect"
+        ],
+        "title": "EmbedSnapshot"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Point": {
+        "properties": {
+          "x": {
+            "type": "number",
+            "maximum": 1000000.0,
+            "minimum": 0.0,
+            "title": "X"
+          },
+          "y": {
+            "type": "number",
+            "maximum": 1000000.0,
+            "minimum": 0.0,
+            "title": "Y"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "title": "Point"
+      },
+      "Quad": {
+        "properties": {
+          "upperLeft": {
+            "$ref": "#/components/schemas/Point"
+          },
+          "upperRight": {
+            "$ref": "#/components/schemas/Point"
+          },
+          "lowerLeft": {
+            "$ref": "#/components/schemas/Point"
+          },
+          "lowerRight": {
+            "$ref": "#/components/schemas/Point"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "upperLeft",
+          "upperRight",
+          "lowerLeft",
+          "lowerRight"
+        ],
+        "title": "Quad"
+      },
+      "Rename": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[^\\x00]+$",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "Rename"
       }
     }
   }

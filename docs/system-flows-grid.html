@@ -1,0 +1,1558 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Super Agentic RAG — Interactive End-to-End Flowcharts & Execution Grids (dev-DuyAnh @ 694e481)</title>
+<style>
+  :root {
+    --bg: #f3f5f8;
+    --surface: #ffffff;
+    --surface-subtle: #f8fafc;
+    --surface-hover: #f1f5f9;
+    --border: #dce2ec;
+    --border-strong: #cbd5e1;
+    --ink: #0f172a;
+    --ink-secondary: #334155;
+    --muted: #64748b;
+    --accent: #0f766e;
+    --accent-ink: #ffffff;
+    --accent-soft: rgba(15, 118, 110, 0.12);
+    --info: #1d4ed8;
+    --info-soft: rgba(29, 78, 216, 0.10);
+    --warn: #b45309;
+    --warn-soft: rgba(180, 83, 9, 0.12);
+    --danger: #b91c1c;
+    --danger-soft: rgba(185, 28, 28, 0.10);
+    --ok: #15803d;
+    --ok-soft: rgba(21, 128, 61, 0.10);
+    --code-bg: #eef2f6;
+    --canvas-bg: #fafbfd;
+    --canvas-dot: #cbd5e1;
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+    --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1018;
+      --surface: #121926;
+      --surface-subtle: #182234;
+      --surface-hover: #1e2a3f;
+      --border: #243045;
+      --border-strong: #334155;
+      --ink: #f1f5f9;
+      --ink-secondary: #cbd5e1;
+      --muted: #94a3b8;
+      --accent: #2dd4bf;
+      --accent-ink: #042f2e;
+      --accent-soft: rgba(45, 212, 191, 0.15);
+      --info: #60a5fa;
+      --info-soft: rgba(96, 165, 250, 0.15);
+      --warn: #fbbf24;
+      --warn-soft: rgba(251, 191, 36, 0.15);
+      --danger: #f87171;
+      --danger-soft: rgba(248, 113, 113, 0.15);
+      --ok: #4ade80;
+      --ok-soft: rgba(74, 222, 128, 0.15);
+      --code-bg: #1b2538;
+      --canvas-bg: #0e1420;
+      --canvas-dot: #243045;
+      --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  :root[data-theme="light"] {
+    --bg: #f3f5f8; --surface: #ffffff; --surface-subtle: #f8fafc; --surface-hover: #f1f5f9;
+    --border: #dce2ec; --border-strong: #cbd5e1; --ink: #0f172a; --ink-secondary: #334155;
+    --muted: #64748b; --accent: #0f766e; --accent-ink: #ffffff; --accent-soft: rgba(15, 118, 110, 0.12);
+    --info: #1d4ed8; --info-soft: rgba(29, 78, 216, 0.10); --warn: #b45309; --warn-soft: rgba(180, 83, 9, 0.12);
+    --danger: #b91c1c; --danger-soft: rgba(185, 28, 28, 0.10); --ok: #15803d; --ok-soft: rgba(21, 128, 61, 0.10);
+    --code-bg: #eef2f6; --canvas-bg: #fafbfd; --canvas-dot: #cbd5e1;
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0b1018; --surface: #121926; --surface-subtle: #182234; --surface-hover: #1e2a3f;
+    --border: #243045; --border-strong: #334155; --ink: #f1f5f9; --ink-secondary: #cbd5e1;
+    --muted: #94a3b8; --accent: #2dd4bf; --accent-ink: #042f2e; --accent-soft: rgba(45, 212, 191, 0.15);
+    --info: #60a5fa; --info-soft: rgba(96, 165, 250, 0.15); --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, 0.15);
+    --danger: #f87171; --danger-soft: rgba(248, 113, 113, 0.15); --ok: #4ade80; --ok-soft: rgba(74, 222, 128, 0.15);
+    --code-bg: #1b2538; --canvas-bg: #0e1420; --canvas-dot: #243045;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--font-sans); font-size: 14px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  code {
+    font-family: var(--font-mono); font-size: 12px; background: var(--code-bg);
+    padding: 1px 5px; border-radius: 4px; word-break: break-word;
+  }
+
+  .topbar {
+    position: sticky; top: 0; z-index: 40; background: var(--surface);
+    border-bottom: 1px solid var(--border); padding: 12px 24px; box-shadow: var(--shadow-sm);
+  }
+  .topbar-inner {
+    max-width: 1640px; margin: 0 auto; display: flex; flex-wrap: wrap;
+    align-items: center; justify-content: space-between; gap: 10px 20px;
+  }
+  .brand { display: flex; flex-direction: column; gap: 2px; }
+  .brand-eyebrow {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--accent); font-family: var(--font-mono);
+  }
+  .brand h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .kpi-strip { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .kpi {
+    background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 10px; display: flex; align-items: baseline; gap: 6px; font-variant-numeric: tabular-nums;
+  }
+  .kpi-val { font-weight: 700; font-size: 14px; color: var(--ink); }
+  .kpi-lbl { font-size: 11px; color: var(--muted); }
+
+  .controls-bar {
+    max-width: 1640px; margin: 10px auto 0; display: flex; flex-wrap: wrap;
+    align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .tabs {
+    display: inline-flex; background: var(--surface-subtle); border: 1px solid var(--border);
+    border-radius: 8px; padding: 3px; gap: 3px;
+  }
+  .tab-btn {
+    border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 13px;
+    font-weight: 600; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  }
+  .tab-btn:hover { color: var(--ink); }
+  .tab-btn[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
+
+  .actions-group { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .search-input {
+    width: 260px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--border-strong);
+    border-radius: 7px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px;
+  }
+  .btn {
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink);
+    font: inherit; font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 7px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .btn:hover { background: var(--surface-hover); }
+  .btn-accent {
+    background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+  }
+  .btn-accent:hover { opacity: 0.92; background: var(--accent); }
+  .btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  .btn:focus-visible, .tab-btn:focus-visible, .pill-btn:focus-visible, .nav-link:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+
+  .main-shell { max-width: 1640px; margin: 0 auto; padding: 16px 24px 52px; }
+
+  .topo-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    margin-bottom: 16px; box-shadow: var(--shadow-sm); overflow: hidden;
+  }
+  .topo-bar {
+    padding: 10px 16px; background: var(--surface-subtle); border-bottom: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .topo-canvas {
+    background: var(--canvas-bg);
+    background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
+    background-size: 18px 18px;
+    padding: 10px; overflow-x: auto;
+  }
+
+  .filter-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; align-items: center; }
+  .pill-btn {
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink-secondary);
+    font: inherit; font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px; cursor: pointer;
+  }
+  .pill-btn:hover { background: var(--surface-hover); }
+  .pill-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+  .workspace-grid { display: grid; grid-template-columns: 265px minmax(0, 1fr); gap: 18px; align-items: start; }
+  @media (max-width: 1080px) {
+    .workspace-grid { grid-template-columns: 1fr; }
+    .sidebar { position: static !important; max-height: none !important; }
+  }
+
+  .sidebar {
+    position: sticky; top: 128px; max-height: calc(100vh - 144px); overflow-y: auto;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px;
+  }
+  .sidebar-group { margin-bottom: 12px; }
+  .sidebar-title {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--muted); margin: 0 0 6px; padding: 0 6px;
+  }
+  .nav-link {
+    display: flex; align-items: baseline; gap: 7px; padding: 5px 7px; border-radius: 6px;
+    color: var(--ink-secondary); text-decoration: none; font-size: 12.5px; line-height: 1.35;
+  }
+  .nav-link:hover { background: var(--surface-hover); color: var(--ink); }
+  .nav-num { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--accent); flex-shrink: 0; }
+
+  .flows-column { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+  .flow-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: var(--shadow-sm); overflow: hidden;
+  }
+  .flow-header {
+    padding: 12px 16px; background: var(--surface-subtle); border-bottom: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+    cursor: pointer; user-select: none;
+  }
+  .flow-header:hover { background: var(--surface-hover); }
+  .flow-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .flow-id {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 700; padding: 2px 7px;
+    border-radius: 5px; background: var(--accent-soft); color: var(--accent);
+  }
+  .domain-tag { font-size: 11px; font-weight: 600; color: var(--muted); }
+  .flag-badge {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600; padding: 2px 7px;
+    border-radius: 5px; background: var(--warn-soft); color: var(--warn);
+  }
+  .flow-title { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); }
+  .flow-summary { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
+  .flow-toggle { font-size: 12px; font-weight: 600; color: var(--muted); font-family: var(--font-mono); }
+
+  .flow-toolbar {
+    padding: 8px 14px; background: var(--surface); border-bottom: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .toolbar-left, .toolbar-right { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .sim-status { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); margin-left: 4px; }
+
+  .diagram-wrap {
+    background: var(--canvas-bg);
+    background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
+    background-size: 16px 16px;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    padding: 12px;
+  }
+  .diagram-svg { display: block; transition: transform 0.15s ease; transform-origin: top left; }
+
+  .svg-node { cursor: pointer; }
+  .svg-node rect, .svg-node polygon { transition: stroke-width 0.15s, filter 0.15s; }
+  .svg-node:hover rect, .svg-node:hover polygon { filter: brightness(0.96); }
+  .svg-node.is-active rect, .svg-node.is-active polygon {
+    stroke: var(--accent) !important;
+    stroke-width: 3px !important;
+    filter: drop-shadow(0 0 6px var(--accent-soft));
+  }
+  .svg-edge.is-active path {
+    stroke: var(--accent) !important;
+    stroke-width: 2.5px !important;
+  }
+
+  .inspector-strip {
+    padding: 10px 16px; background: var(--accent-soft); border-bottom: 1px solid var(--border);
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px;
+    font-size: 12.5px;
+  }
+  .insp-label {
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--accent); margin-bottom: 2px;
+  }
+
+  .grid-scroll { overflow-x: auto; }
+  table.exec-grid {
+    width: 100%; min-width: 1000px; border-collapse: collapse; text-align: left; font-size: 12.5px;
+  }
+  table.exec-grid th {
+    background: var(--surface-subtle); color: var(--muted); font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.04em; padding: 8px 11px; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  table.exec-grid td {
+    padding: 9px 11px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--ink-secondary);
+  }
+  table.exec-grid tbody tr { cursor: pointer; }
+  table.exec-grid tbody tr:last-child td { border-bottom: 0; }
+  table.exec-grid tbody tr:hover td { background: var(--surface-subtle); }
+  table.exec-grid tbody tr.row-active td { background: var(--accent-soft); color: var(--ink); }
+
+  .step-cell {
+    font-family: var(--font-mono); font-weight: 700; color: var(--ink);
+    text-align: center; font-variant-numeric: tabular-nums; width: 46px;
+  }
+  .layer-badge {
+    display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 5px; white-space: nowrap;
+  }
+  .l-ui { background: var(--info-soft); color: var(--info); }
+  .l-gw { background: var(--accent-soft); color: var(--accent); }
+  .l-svc { background: var(--ok-soft); color: var(--ok); }
+  .l-wrk { background: var(--warn-soft); color: var(--warn); }
+  .l-err { background: var(--danger-soft); color: var(--danger); }
+
+  .err-text { color: var(--danger); font-weight: 500; }
+  .ok-text { color: var(--ok); font-weight: 600; }
+
+  .panel-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 18px; box-shadow: var(--shadow-sm);
+  }
+  .panel-card h2 { margin: 0 0 10px; font-size: 16px; font-weight: 700; }
+  .hidden { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-eyebrow">branch: dev-DuyAnh @ 694e481 · Interactive End-to-End Explorer</span>
+      <h1>Super Agentic RAG — Lưu đồ End-to-End &amp; Execution Grids</h1>
+    </div>
+    <div class="kpi-strip">
+      <div class="kpi"><span class="kpi-val">21</span><span class="kpi-lbl">End-to-End Flows</span></div>
+      <div class="kpi"><span class="kpi-val">74</span><span class="kpi-lbl">Grid Steps</span></div>
+      <div class="kpi"><span class="kpi-val">10</span><span class="kpi-lbl">Services</span></div>
+      <div class="kpi"><span class="kpi-val">11</span><span class="kpi-lbl">Feature Flags</span></div>
+    </div>
+  </div>
+  <div class="controls-bar">
+    <div class="tabs" role="tablist" aria-label="Chế độ xem">
+      <button type="button" class="tab-btn" role="tab" aria-selected="true" data-tab="grids">Lưu đồ &amp; 21 Grids</button>
+      <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="matrix">Ma trận Capability × Mode × Task</button>
+      <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="specs">Feature Flags, Locks &amp; Budgets</button>
+    </div>
+    <div class="actions-group">
+      <input type="search" id="searchBox" class="search-input" placeholder="Tìm tên hàm, bảng SQL, flag, lỗi..." aria-label="Tìm kiếm trong luồng">
+      <button type="button" id="expandAllBtn" class="btn">Mở tất cả</button>
+      <button type="button" id="collapseAllBtn" class="btn">Thu gọn</button>
+      <button type="button" id="themeToggle" class="btn">Theme: Auto</button>
+    </div>
+  </div>
+</header>
+
+<main class="main-shell">
+  <section id="tab-grids">
+    <div class="topo-card">
+      <div class="topo-bar">
+        <div>
+          <strong>Bản đồ Kiến trúc Tương tác (Click vào Service để lọc các luồng liên quan)</strong>
+          <span id="svcFilterStatus" style="color:var(--muted);font-size:12px;margin-left:8px;">Đang hiện: Tất cả services</span>
+        </div>
+        <div class="actions-group">
+          <button type="button" id="clearSvcFilter" class="btn hidden">Bỏ lọc Service</button>
+          <button type="button" id="toggleTopoBtn" class="btn">Ẩn/Hiện Bản đồ</button>
+        </div>
+      </div>
+      <div class="topo-canvas" id="topoCanvas"></div>
+    </div>
+
+    <div class="filter-strip" id="domainFilters" role="group" aria-label="Lọc theo nhóm luồng"></div>
+    <div class="workspace-grid">
+      <aside class="sidebar" id="sidebarNav" aria-label="Mục lục luồng"></aside>
+      <div class="flows-column" id="flowsContainer"></div>
+    </div>
+  </section>
+
+  <section id="tab-matrix" class="hidden">
+    <div class="panel-card">
+      <h2>Ma trận định tuyến Capability × Mode × Task (19 Tasks · 57 Tổ hợp)</h2>
+      <p style="color:var(--muted);margin:0 0 12px;">Đối chiếu trực tiếp từ <code>services/agent-orchestrator/app/types.py</code> và <code>main.py</code>.</p>
+      <div class="grid-scroll">
+        <table class="exec-grid" id="matrixTable">
+          <thead>
+            <tr><th>Capability</th><th>Task</th><th>ASK</th><th>PLAN</th><th>AGENT</th><th>Điều kiện / Routing / Schema Fields</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-specs" class="hidden">
+    <div class="panel-card">
+      <h2>11 Feature Flags (<code>compose.dev.yaml</code> &amp; <code>/workflow-features</code>)</h2>
+      <div class="grid-scroll">
+        <table class="exec-grid" id="flagsTable">
+          <thead><tr><th>Biến môi trường</th><th>Mặc định</th><th>Service sở hữu</th><th>Ảnh hưởng lên luồng chạy</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel-card">
+      <h2>PostgreSQL Advisory Locks &amp; Runtime Budgets (<code>rag_runtime.py</code>)</h2>
+      <div class="grid-scroll">
+        <table class="exec-grid" id="locksTable">
+          <thead><tr><th>Cơ chế / Hằng số</th><th>Giá trị / Lock ID</th><th>Service</th><th>Vai trò &amp; Bất biến an toàn</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const DOMAINS = [
+  { id: 'all', label: 'Tất cả (21)' },
+  { id: 'identity', label: '1. Identity & Admin (01–03)' },
+  { id: 'ingestion', label: '2. Document & Ingestion (04–07)' },
+  { id: 'retrieval', label: '3. Retrieval & Ask (08–10)' },
+  { id: 'agentic', label: '4. Agentic Workflows (11–16)' },
+  { id: 'learning', label: '5. Artifacts & Learning (17–21)' },
+];
+
+const TOPO_NODES = [
+  { id: 'web', label: 'Web App & Proxy', sub: 'apps/web /v1/*', x: 20, y: 120, kind: 'ui', kw: 'apps/web' },
+  { id: 'gateway', label: 'api-gateway', sub: 'Origin + Rate Limit', x: 220, y: 120, kind: 'gw', kw: 'api-gateway' },
+  { id: 'auth', label: 'auth-service', sub: 'JWT / Reset / Audit', x: 430, y: 20, kind: 'svc', kw: 'auth-service' },
+  { id: 'workspace', label: 'workspace-service', sub: 'RBAC / Crossref', x: 430, y: 95, kind: 'svc', kw: 'workspace' },
+  { id: 'admin', label: 'admin-service', sub: 'Accounts / Jobs', x: 430, y: 170, kind: 'svc', kw: 'admin-service' },
+  { id: 'document', label: 'document-service', sub: 'Upload / MinIO / Notes', x: 430, y: 245, kind: 'svc', kw: 'document-service' },
+  { id: 'ingestion', label: 'ingestion-service', sub: 'RabbitMQ / Leases', x: 660, y: 245, kind: 'wrk', kw: 'ingestion' },
+  { id: 'converter', label: 'document-converter', sub: 'LibreOffice DOCX', x: 900, y: 210, kind: 'svc', kw: 'document-converter' },
+  { id: 'parser', label: 'document-parser', sub: 'Docling + PDFium', x: 900, y: 285, kind: 'svc', kw: 'document-parser' },
+  { id: 'retrieval', label: 'retrieval-service', sub: 'Hybrid Cosine+BM25', x: 660, y: 120, kind: 'svc', kw: 'retrieval' },
+  { id: 'orchestrator', label: 'agent-orchestrator', sub: 'Ask/Plan/LangGraph', x: 660, y: 25, kind: 'wrk', kw: 'orchestrator' },
+  { id: 'artifact', label: 'artifact-service', sub: 'Export / FSRS / Map', x: 900, y: 25, kind: 'svc', kw: 'artifact' },
+  { id: 'model', label: 'model-gateway', sub: 'Embed + Chat LLM', x: 900, y: 120, kind: 'gw', kw: 'model-gateway' },
+];
+
+const TOPO_EDGES = [
+  ['web', 'gateway'], ['gateway', 'auth'], ['gateway', 'workspace'], ['gateway', 'admin'],
+  ['gateway', 'document'], ['gateway', 'retrieval'], ['gateway', 'orchestrator'], ['gateway', 'artifact'],
+  ['document', 'ingestion'], ['ingestion', 'converter'], ['ingestion', 'parser'],
+  ['ingestion', 'model'], ['ingestion', 'retrieval'], ['orchestrator', 'retrieval'],
+  ['orchestrator', 'model'], ['retrieval', 'model'], ['artifact', 'orchestrator'], ['artifact', 'document'],
+];
+
+// Each diagram node: [id, label, sub, kind(ui|gw|svc|wrk|db|decision|err|ok), col, row, stepRef]
+// Each diagram edge: [from, to, label, type(main|branch|err|loop)]
+const FLOWS = [
+  {
+    id: '01', domain: 'identity', domainLabel: 'Identity & Admin',
+    title: 'Flow 01 — Authentication, JWT 5-min & Refresh Rotation',
+    summary: 'Đăng ký, đăng nhập Argon2id, tự động xoay vòng refresh token trong 12h và chống reuse token.',
+    flags: [],
+    diagram: {
+      nodes: [
+        ['n1', 'Web Fetch', 'authenticatedFetch', 'ui', 0, 0, '1'],
+        ['n1l', 'Lock Refresh', 'navigator.locks', 'ui', 0, 1, '1'],
+        ['n2', 'Proxy & Gateway', 'Origin + Redis Limit', 'gw', 1, 0, '2'],
+        ['e1', '403 / 429', 'Invalid Origin / Rate', 'err', 1, 1, '2'],
+        ['n3', 'Auth: Login/Reg', 'Argon2id Sem(4)', 'svc', 2, 0, '3'],
+        ['e2', '401 Denied', 'invalid_credentials', 'err', 2, 1, '3'],
+        ['n4', 'Auth: Refresh', 'FOR UPDATE Rotation', 'svc', 3, 0, '4'],
+        ['e3', 'Token Reuse!', 'Revoke All Sessions', 'err', 3, 1, '4'],
+        ['n5', 'Password Reset', 'Token 20m + SMTP', 'svc', 4, 0, '5'],
+        ['ok', '204 / Session OK', 'JWT 5m + Revoke Old', 'ok', 5, 0, '5'],
+      ],
+      edges: [
+        ['n1', 'n2', 'Cookie/Req', 'main'],
+        ['n1', 'n1l', '401', 'branch'],
+        ['n1l', 'n4', 'POST /refresh', 'loop'],
+        ['n2', 'e1', 'Blocked', 'err'],
+        ['n2', 'n3', 'login/reg', 'main'],
+        ['n3', 'e2', 'Bad pass', 'err'],
+        ['n3', 'n4', 'JWT 5m', 'main'],
+        ['n4', 'e3', 'consumed_at!=null', 'err'],
+        ['n4', 'n5', 'Rotated', 'main'],
+        ['n5', 'ok', 'Confirm OK', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'UI', 'Web Client', 'apps/web/app/lib/api.ts: authenticatedFetch, renewSession', 'HttpOnly cookies (access, refresh)', 'navigator.locks("rag-session-renewal") đồng bộ các tab', 'Gặp 401 trên /v1/workspaces/* tự refresh rồi replay request', 'Lỗi mạng/timeout 8s -> RenewalUnconfirmed (401)'],
+      ['2', 'GW', 'Proxy & Gateway', 'route.ts:relay · api-gateway:proxy', 'Kiểm tra Origin == WEB_ORIGIN; body <= 16 KiB', 'Redis rate limit gateway:{path}:{ip_hash} (100/900s)', 'Forward cookie sang auth-service (:8000)', 'Sai Origin -> 403 invalid_origin; vượt limit -> 429'],
+      ['3', 'SVC', 'Auth Service', 'auth-service/app/main.py: register, login', 'Password >= 8 chars ([A-Z], [0-9], special); Redis limit_account', 'Argon2id Semaphore(4) + dummy_hash; INSERT identity.accounts, auth_sessions, refresh_tokens, audit', '204 (register) hoặc Account + Access JWT (<=300s) & Refresh (<=43200s)', 'Sai pass -> 401 invalid_credentials; trùng email register vẫn 204'],
+      ['4', 'SVC', 'Auth Rotation', 'auth-service/app/main.py: refresh', 'Cookie refresh token', 'SELECT auth_sessions FOR UPDATE; kiểm tra consumed_at trên refresh_tokens', 'Đánh dấu token cũ consumed_at, phát cặp cookie mới (204)', 'Phát hiện reuse (consumed_at != NULL) -> revoke toàn bộ session + audit denied'],
+      ['5', 'SVC', 'Password Reset', 'auth-service/app/main.py: request_reset, confirm_reset', 'Email + token 43 ký tự', 'Lưu sha256(token) vào identity.password_resets (TTL 20m); SMTP background', 'Đổi pass, xóa token, revoke toàn bộ session hiện hữu (204)', 'Token sai/hết hạn -> 400 invalid_reset; thiếu SMTP vẫn trả 204'],
+    ]
+  },
+  {
+    id: '02', domain: 'identity', domainLabel: 'Identity & Admin',
+    title: 'Flow 02 — Workspace RBAC, Sharing & Cascading Deletion',
+    summary: 'Quản lý không gian làm việc OWNER/EDITOR/VIEWER và xóa dây chuyền qua RabbitMQ Outbox.',
+    flags: [],
+    diagram: {
+      nodes: [
+        ['n1', 'Create Workspace', 'Idempotency Receipt', 'svc', 0, 0, '1'],
+        ['e1', '409 Conflict', 'Diff name on key', 'err', 0, 1, '1'],
+        ['n2', 'Share Members', 'OWNER + Lock FOR UPDATE', 'svc', 1, 0, '2'],
+        ['n3', 'Internal Gates', 'doc/interaction-access', 'svc', 2, 0, '3'],
+        ['n4', 'Delete Phase 1', 'deleting_at + outbox', 'svc', 3, 0, '4'],
+        ['n5', 'RabbitMQ Fan-out', 'deletion_requested.v1', 'wrk', 4, 0, '5'],
+        ['n5b', 'Doc + Ingest Cleanup', 'MinIO + Qdrant Delete', 'wrk', 4, 1, '5'],
+        ['ok', 'Workspace Purged', 'DELETE workspaces', 'ok', 5, 0, '5'],
+      ],
+      edges: [
+        ['n1', 'e1', 'Conflict', 'err'],
+        ['n1', 'n2', '201 OWNER', 'main'],
+        ['n2', 'n3', 'memberships', 'main'],
+        ['n3', 'n4', 'OWNER DELETE', 'main'],
+        ['n4', 'n5', '202 Outbox', 'main'],
+        ['n5', 'n5b', 'Consume', 'branch'],
+        ['n5b', 'ok', 'documents_deleted.v1', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'SVC', 'Workspace Create', 'workspace-service/app/main.py: create_workspace', 'Idempotency-Key + Actor từ auth /internal/v1/session', 'INSERT workspace.create_receipts, workspace.workspaces, workspace.audit', '201 Created (role="OWNER")', 'Trùng key khác tên -> 409 idempotency_conflict'],
+      ['2', 'SVC', 'Share & RBAC', 'workspace-service/app/main.py: set_member, remove_member', 'Chỉ OWNER; lock_workspace FOR UPDATE', 'Verify user qua auth /internal/v1/users/{id}; upsert workspace.memberships', 'Member (PUT) hoặc 204 (DELETE)', 'Đổi quyền Owner -> 409 fixed_owner; user không tồn tại -> 404'],
+      ['3', 'SVC', 'Internal Access Gates', 'workspace-service: document_access, interaction_access', 'Service token (Document / Interaction)', 'Query VIEW ACCESSIBLE (deleting_at IS NULL)', 'Trả {role, user_id} cho service gọi', 'Workspace đang xóa hoặc user bị gỡ -> 404 not_found'],
+      ['4', 'SVC', 'Delete Phase 1', 'workspace-service: delete_workspace', 'Chỉ OWNER', 'UPDATE deleting_at = now(); enqueue workspace.deletion_requested.v1 vào workspace.outbox', '202 Accepted (ẩn ngay khỏi API)', 'Gọi lặp trả idempotent 202'],
+      ['5', 'WRK', 'Cleanup Phase 2', 'document-service:cleanup_one · ingestion-service:handle_event', 'RabbitMQ rag.documents', 'Document xóa MinIO & annotations; Ingestion hủy jobs & xóa Qdrant; gửi workspace.documents_deleted.v1 -> xóa workspace row', 'Dọn sạch hoàn toàn không để orphan', 'Lỗi MinIO/Qdrant retry backoff tối đa 8 lần'],
+    ]
+  },
+  {
+    id: '03', domain: 'identity', domainLabel: 'Identity & Admin',
+    title: 'Flow 03 — Admin Console Operations',
+    summary: 'Quản trị tài khoản, thu hồi session, retry ingestion jobs và kiểm tra trạng thái read-only.',
+    flags: [],
+    diagram: {
+      nodes: [
+        ['n1', 'Admin Guard', 'GET /admin-access', 'svc', 0, 0, '1'],
+        ['e1', '403 Forbidden', 'Role == USER', 'err', 0, 1, '1'],
+        ['d1', 'Relay Target?', 'X-Admin-Service-Token', 'decision', 1, 0, '1'],
+        ['n2', 'Auth: Update User', 'Lock 710109 + Revoke', 'svc', 2, 0, '2'],
+        ['n3', 'Ingest: Retry Job', 'Reset failed -> queued', 'svc', 2, 1, '3'],
+        ['n4', 'Models & /readyz', '8 Backends Read-Only', 'svc', 3, 0, '4'],
+        ['e2', '409 Conflict', 'self_admin / not_retry', 'err', 3, 1, '2'],
+      ],
+      edges: [
+        ['n1', 'e1', 'Not ADMIN', 'err'],
+        ['n1', 'd1', 'ADMIN', 'main'],
+        ['d1', 'n2', 'PATCH /accounts', 'main'],
+        ['d1', 'n3', 'POST /retry', 'branch'],
+        ['d1', 'n4', 'GET /models,/services', 'branch'],
+        ['n2', 'e2', 'Self lock', 'err'],
+        ['n3', 'e2', 'Cancelled', 'err'],
+      ]
+    },
+    steps: [
+      ['1', 'SVC', 'Admin Guard', 'admin-service/app/main.py: operator, relay', 'ACCESS_COOKIE -> GET auth /v1/auth/admin-access', 'Gắn X-Admin-Service-Token chuyển tiếp backend', 'Cho phép nếu role == ADMIN', 'USER thường -> 403 forbidden + ghi audit admin.access denied'],
+      ['2', 'SVC', 'Accounts & Revoke', 'auth-service/app/main.py: admin_accounts, admin_update', 'AccountUpdate(role, disabled)', 'Advisory lock 710109; UPDATE identity.accounts; revoke mọi auth_sessions của target user', 'Trả account đã cập nhật', 'Admin tự khóa/hạ quyền chính mình -> 409 self_admin_change'],
+      ['3', 'SVC', 'Job Retry', 'ingestion-service/app/main.py: admin_jobs, admin_retry', 'job_id', 'Reset status=queued, attempts=0 nếu workspace/doc chưa cancelled', '204 No Content; IndexWorker nhận lại job', 'Job không failed hoặc doc đã hủy -> 409 job_not_retryable'],
+      ['4', 'SVC', 'Health & Models', 'admin-service: services, models · model-gateway: admin_models', 'Admin token', 'Gọi song song /readyz 8 backends; đọc metadata config (read-only)', 'Trả trạng thái sẵn sàng & cấu hình model', 'Timeout 2s -> ready: false; sửa model trên UI là NOT_IMPLEMENTED'],
+    ]
+  },
+  {
+    id: '04', domain: 'ingestion', domainLabel: 'Document & Ingestion',
+    title: 'Flow 04 — Document Upload, Security Inspection & Transactional Outbox',
+    summary: 'Kiểm tra magic bytes/zip-bomb, giữ chỗ 2 pha với Advisory Lock 2002 và đẩy sự kiện qua Outbox.',
+    flags: [],
+    diagram: {
+      nodes: [
+        ['n1', 'Gateway & Spool', 'Stream + SHA-256', 'gw', 0, 0, '1'],
+        ['e1', '403 / 413', 'VIEWER / > 25 MiB', 'err', 0, 1, '1'],
+        ['n2', 'Inspect File', '%PDF- / Zip-Bomb Check', 'svc', 1, 0, '2'],
+        ['e2', '415 / 400', 'Macro / Bad Format', 'err', 1, 1, '2'],
+        ['n3', 'Phase 1 Reserve', 'Lock 2002 + uploading', 'svc', 2, 0, '3'],
+        ['n4', 'Phase 2 MinIO+Outbox', 'put_object + ready', 'svc', 3, 0, '4'],
+        ['n5', 'Outbox & RabbitMQ', 'SKIP LOCKED -> Lock 2003', 'wrk', 4, 0, '5'],
+        ['ok', 'Jobs Enqueued', 'PDF:[idx] | DOCX:[prv,idx]', 'ok', 5, 0, '5'],
+      ],
+      edges: [
+        ['n1', 'e1', 'Too big', 'err'],
+        ['n1', 'n2', 'TempFile', 'main'],
+        ['n2', 'e2', 'Unsafe', 'err'],
+        ['n2', 'n3', 'Valid MIME', 'main'],
+        ['n3', 'n4', 'doc_id reserved', 'main'],
+        ['n4', 'n5', '201 + outbox', 'main'],
+        ['n5', 'ok', 'uploaded.v1', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'GW', 'Upload Ingress', 'api-gateway:proxy · document-service:upload', 'application/octet-stream, Idempotency-Key, X-Filename, OWNER/EDITOR', 'Stream ra TemporaryFile, tính byte size & SHA-256', 'Chuẩn bị inspect file', 'VIEWER -> 403; > 25 MiB -> 413 file_too_large'],
+      ['2', 'SVC', 'File Inspection', 'document-service/app/storage.py: inspect_file', 'Bytes trên disk tạm', 'PDF: %PDF- tại byte 0. DOCX: Zip <= 2000 entries, <= 128 MiB uncompressed, không encrypted, không .., không vbaproject.bin', 'Xác định media_type hợp lệ', 'Sai cấu trúc/có macro -> 415 / 400'],
+      ['3', 'SVC', 'Phase 1 Reserve', 'document-service/app/main.py: upload', 'require_open -> pg_advisory_xact_lock(ws, 2002)', 'INSERT documents.items(state="uploading") ON CONFLICT DO NOTHING', 'Giữ chỗ document_id', 'Trùng key khác hash/tên -> 409; trùng key đã ready -> trả doc cũ'],
+      ['4', 'SVC', 'Phase 2 MinIO & Outbox', 'document-service: upload · rag_events.py: enqueue', 'File stream', 'MinIO.put_object("{ws}/{doc_id}/original"); UPDATE state="ready", preview_ready=(PDF) + INSERT documents.outbox', '201 Created', 'Lỗi MinIO -> 503; cleanup_one dọn upload kẹt > 1h'],
+      ['5', 'WRK', 'Outbox & Spawn Jobs', 'rag_events.py: publish_one · ingestion-service: handle_event', 'SELECT FOR UPDATE SKIP LOCKED trên documents.outbox', 'Publish RabbitMQ rag.documents; Ingestion nhận dưới Advisory Lock 2003', 'Tạo ingestion.jobs: PDF -> [index]; DOCX -> [preview, index]', 'Doc/Workspace đã hủy -> tạo job ở trạng thái cancelled'],
+    ]
+  },
+  {
+    id: '05', domain: 'ingestion', domainLabel: 'Document & Ingestion',
+    title: 'Flow 05 — DOCX Preview Conversion',
+    summary: 'Chuyển đổi DOCX sang PDF bằng LibreOffice cô lập để phục vụ reader và Docling parser.',
+    flags: [],
+    diagram: {
+      nodes: [
+        ['n1', 'Claim Preview Job', 'SKIP LOCKED (TTL 2m)', 'wrk', 0, 0, '1'],
+        ['e1', 'worker_interrupted', 'attempts >= 3', 'err', 0, 1, '1'],
+        ['n2', 'LibreOffice Convert', 'Sem(1), MacroLevel=3', 'svc', 1, 0, '2'],
+        ['e2', 'conversion_failed', 'Blocks index job', 'err', 1, 1, '2'],
+        ['n3', 'Save Preview PDF', 'MinIO + preview_ready', 'svc', 2, 0, '3'],
+        ['ok', 'Preview Succeeded', 'Unlock IndexWorker', 'ok', 3, 0, '3'],
+      ],
+      edges: [
+        ['n1', 'e1', 'Max tries', 'err'],
+        ['n1', 'n2', 'GET /original', 'main'],
+        ['n2', 'e2', '413/415/422', 'err'],
+        ['n2', 'n3', 'PUT /preview', 'main'],
+        ['n3', 'ok', 'preview_ready=true', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'WRK', 'Claim Preview Job', 'ingestion-service/app/main.py: claim_preview', 'kind="preview", attempts < 3', 'FOR UPDATE SKIP LOCKED, lease TTL 2 phút', 'status="running"', 'Quá 3 lần -> failed (worker_interrupted)'],
+      ['2', 'SVC', 'LibreOffice Convert', 'ingestion: convert · document-converter: convert', 'Internal token', 'GET .../original -> POST document-converter:8000/convert (Semaphore(1), soffice headless MacroSecurityLevel=3, 45s)', 'Trả bytes upload.pdf', 'Lỗi convert -> conversion_failed (khiến job index cũng fail preview_failed)'],
+      ['3', 'SVC', 'Save Preview PDF', 'document-service/app/main.py: save_preview', 'Bytes PDF', 'Kiểm tra %PDF-, put MinIO {ws}/{doc_id}/preview.pdf, set preview_ready=true', 'Job preview -> succeeded, mở khóa IndexWorker', 'Lỗi mạng -> retry backoff 2^attempts giây'],
+    ]
+  },
+  {
+    id: '06', domain: 'ingestion', domainLabel: 'Document & Ingestion',
+    title: 'Flow 06 — Docling Parsing & Sentence Geometry Extraction',
+    summary: 'Trích xuất văn bản/bảng với Docling trong subprocess cô lập và căn chỉnh tọa độ từng câu bằng PDFium.',
+    flags: ['INDEX_SENTENCE_CITATIONS'],
+    diagram: {
+      nodes: [
+        ['n1', 'Fetch Index Source', 'PDF / preview.pdf', 'wrk', 0, 0, '1'],
+        ['n2', 'Parser Subprocess', 'Lock slot, 330s wall', 'svc', 1, 0, '2'],
+        ['e1', '503 busy / 422 timeout', 'Retry or Fail', 'err', 1, 1, '2'],
+        ['n3', 'Docling Extract', 'do_ocr=False, region', 'svc', 2, 0, '3'],
+        ['e2', '422 no_text', 'Scanned PDF (no OCR)', 'err', 2, 1, '3'],
+        ['d1', 'INDEX_SENTENCE?', 'Flag check', 'decision', 3, 0, '4'],
+        ['n4', 'PDFium Geometry', 'align + line_boxes', 'svc', 4, 0, '4'],
+        ['n4b', 'Chunk-only Fallback', 'No segment map', 'svc', 4, 1, '4'],
+        ['n5', 'group_blocks', 'Page+Sec <=1500 chars', 'svc', 5, 0, '5'],
+      ],
+      edges: [
+        ['n1', 'n2', 'POST /parse', 'main'],
+        ['n2', 'e1', 'Busy/Timeout', 'err'],
+        ['n2', 'n3', 'PDF bytes', 'main'],
+        ['n3', 'e2', 'Empty', 'err'],
+        ['n3', 'd1', 'DoclingDoc', 'main'],
+        ['d1', 'n4', 'true', 'main'],
+        ['d1', 'n4b', 'false / fail', 'branch'],
+        ['n4', 'n5', 'segments', 'main'],
+        ['n4b', 'n5', 'legacy', 'branch'],
+      ]
+    },
+    steps: [
+      ['1', 'WRK', 'Fetch Index Source', 'ingestion: read_chunks · document-service: index_source', 'preview_ready=true', 'GET .../index-source (PDF gốc hoặc preview.pdf của DOCX)', 'PDF bytes (<= 25 MiB)', 'Doc bị xóa -> RemovedSource (cancelled)'],
+      ['2', 'SVC', 'Isolated Subprocess', 'document-parser/app/main.py: parse, converted', 'asyncio.Lock (slot), Content-Type: application/pdf', 'Subprocess python -m app.conversion với wall timeout 300+30s', 'JSON chunks payload', 'Đang bận -> 503 parser_busy; quá giờ -> 422 parse_timeout'],
+      ['3', 'SVC', 'Docling Extract', 'document-parser/app/conversion.py: parse_pdf, blocks', 'do_ocr=False, max_num_pages=300', 'Bỏ header/footer, bảng -> Markdown, giữ section, chuẩn hóa region [0,1]', 'Stream IndexedChunk', 'Không có text -> 422 no_text (OCR chưa bật)'],
+      ['4', 'SVC', 'Sentence Geometry', 'segment_geometry.py: Geometry, fragment_segments', 'INDEX_SENTENCE_CITATIONS == "true"', 'pypdfium2 đọc charbox trang không xoay/crop; align duy nhất chuỗi bỏ khoảng trắng; line_boxes (<= 8 dòng)', 'Gắn citation_segments_v1 (precision: line / coarse / page)', 'Không align được -> fallback an toàn về chunk-only hoặc page'],
+      ['5', 'SVC', 'Canonical Chunking', 'chunking.py: group_blocks, join_blocks', 'CHUNK_SIZE=1500, MAX_CHUNKS=2000', 'Gom block cùng page + cùng section + <= 1500 chars; tịnh tiến start/end segment', 'Danh sách IndexedChunk chuẩn hóa', 'Quá 2000 chunks -> 422 too_many_chunks'],
+    ]
+  },
+  {
+    id: '07', domain: 'ingestion', domainLabel: 'Document & Ingestion',
+    title: 'Flow 07 — Embedding Batching, Qdrant Upsert & Atomic Publication',
+    summary: 'Sinh generation UUIDv5 tất định, gọi Model Gateway (Ollama/Gemini/OpenAI) và publish nguyên tử vào Qdrant/PG.',
+    flags: ['INDEX_SENTENCE_CITATIONS'],
+    diagram: {
+      nodes: [
+        ['n1', 'UUIDv5 Generation', 'gen, point_id, seg_id', 'wrk', 0, 0, '1'],
+        ['n2', 'Embed Batch (16)', 'Ollama/Gemini Sem(4)', 'svc', 1, 0, '2'],
+        ['e1', 'MissingModel / 502', 'Wait 60s / Invalid vec', 'err', 1, 1, '2'],
+        ['n3', 'Qdrant index-batch', 'rag_chunks_{fp} wait=true', 'svc', 2, 0, '3'],
+        ['e2', 'Backoff 4^attempts', 'Network / Qdrant fail', 'err', 2, 1, '3'],
+        ['n4', 'Atomic Publish', 'Lock 2003 + lease check', 'wrk', 3, 0, '4'],
+        ['ok', 'Index Succeeded', 'Active generation live', 'ok', 4, 0, '4'],
+      ],
+      edges: [
+        ['n1', 'n2', 'Batches of 16', 'main'],
+        ['n2', 'e1', '503 / 502', 'err'],
+        ['n2', 'n3', 'Vectors OK', 'main'],
+        ['n3', 'e2', 'Fail', 'err'],
+        ['n3', 'n2', 'Next batch', 'loop'],
+        ['n3', 'n4', 'Final batch', 'main'],
+        ['n4', 'ok', 'status=succeeded', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'WRK', 'Deterministic Generation', 'ingestion/indexing.py: citation_generation', 'chunks, config.fingerprint', 'generation = uuid5(doc_id, "{rev}:{fp}:{sha256}"); point_id = uuid5(gen, ordinal); segment_id = uuid5(point, "sentence:v1:{ord}")', 'Định danh bất biến theo nội dung + model', 'Đổi model/dimensions -> tạo fingerprint mới độc lập'],
+      ['2', 'SVC', 'Model Gateway Embed', 'indexing.py: embed · model-gateway: embed_batch, fetch_embeddings', 'Batch 16 chunks, timeout 60s', 'Ollama: /api/embed (num_ctx=8192). Gemini: Semaphore(4) singletons. OpenAI: /embeddings batch', 'Mảng vectors khớp dimensions & khác 0', 'Sai kích thước/zero -> 502; chưa cấu hình model -> chờ 60s giữ nguyên attempt'],
+      ['3', 'SVC', 'Qdrant Upsert', 'indexing.py: publish · retrieval: prepare, index_batch', 'ordering="strong", wait="true"', 'Tạo collection rag_chunks_{fp} (Cosine, on_disk=true, index keyword & BM25 text)', 'Lưu vectors + payload + citation_segments_v1', 'Lỗi kết nối -> retry backoff 4^attempts giây'],
+      ['4', 'WRK', 'Atomic Lock & Reindex', 'indexing.py: publish · reindex.py: reindex', 'Advisory Lock 2003, lease_id còn hạn', 'Batch cuối set status="succeeded", index_generation=:gen, embedding_fingerprint=:fp', 'Tài liệu sẵn sàng cho Search/Ask', 'reindex.py --apply giữ nguyên generation cũ tới khi batch mới xong'],
+    ]
+  },
+  {
+    id: '08', domain: 'retrieval', domainLabel: 'Retrieval & Ask',
+    title: 'Flow 08 — Public & Delegated Hybrid Retrieval Engine',
+    summary: 'Tìm kiếm lai Dense Cosine + Sparse BM25 với RRF Fusion và bảo mật Double-Scoping 2 lớp.',
+    flags: ['ASK_SENTENCE_CITATIONS'],
+    diagram: {
+      nodes: [
+        ['n1', 'Pre-Scope Check', 'Cookie / Service Token', 'svc', 0, 0, '1'],
+        ['e1', '404 not_found', 'Out of workspace', 'err', 0, 1, '1'],
+        ['n2', 'Active Indexes', 'embedding-config + jobs', 'svc', 1, 0, '2'],
+        ['z1', 'Zero-Hit Fast Path', 'Return [] immediately', 'ok', 1, 1, '2'],
+        ['n3', 'Qdrant RRF Query', 'Dense + Sparse BM25', 'svc', 2, 0, '3'],
+        ['n4', 'Post-Scope+Segments', 'Drop deleted + Verify', 'svc', 3, 0, '4'],
+        ['n5', 'Lexical Re-rank', '+0.08 overlap + Dedup', 'ok', 4, 0, '5'],
+      ],
+      edges: [
+        ['n1', 'e1', 'Invalid doc', 'err'],
+        ['n1', 'n2', 'Visible docs', 'main'],
+        ['n2', 'z1', 'scope empty', 'branch'],
+        ['n2', 'n3', 'Embed query', 'main'],
+        ['n3', 'n4', 'prefetch*4 -> RRF', 'main'],
+        ['n4', 'n5', 'Validated', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'SVC', 'Double-Scope Pre-check', 'retrieval/search.py: search, delegated_search', 'ACCESS_COOKIE (Public) hoặc X-Interaction-Service-Token (Worker)', 'Lấy visible_documents / retrieval-sources từ document-service', 'Giao tập document_ids hợp lệ', 'Có doc ngoài workspace -> 404 not_found'],
+      ['2', 'SVC', 'Active Index Fast Path', 'retrieval/search.py: candidates', 'config.fingerprint từ model-gateway', 'POST ingestion-service/.../active-indexes', 'Map {doc_id: index_generation}', 'Zero-hit fast path: scope rỗng -> trả [] ngay, không gọi embed query'],
+      ['3', 'SVC', 'Qdrant RRF Query', 'retrieval/search.py: candidates', 'query, prefetch_limit = max(25, limit*4)', 'Embed query -> POST qdrant /points/query với Dense Cosine + Sparse BM25 prefetch -> fusion="rrf"', 'Top prefetch_limit points', 'Lỗi Qdrant/Model -> 503 unavailable'],
+      ['4', 'SVC', 'Post-Scope & Segment Check', 'search.py: search, checked_segments', 'Kiểm tra quyền lần 2 sau Qdrant', 'Loại doc vừa bị xóa/unshare; verify segment_id, offset liên tục, rects [0,1]', 'Drop map hỏng nhưng giữ chunk cha', 'Ngăn rò rỉ dữ liệu do race condition'],
+      ['5', 'SVC', 'Lexical Re-rank & Dedup', 'retrieval/search.py: rank', 'Unicode NFC + WORD regex', 'Score + 0.08 * |query_words & passage_words| / max(1,|query_words|); dedup theo text', 'SearchResult(evidence, indexed_documents) (limit: 5 UI / 6 Worker)', 'Tie-break tất định theo chunk_id'],
+    ]
+  },
+  {
+    id: '09', domain: 'retrieval', domainLabel: 'Retrieval & Ask',
+    title: 'Flow 09 — History-Aware Ask & Adaptive Sentence Citations',
+    summary: 'Chụp bất biến 6 lượt lịch sử, viết lại query, chọn single/two-pass attribution và tô sáng câu trên PDF.js.',
+    flags: ['ASK_SENTENCE_CITATIONS', 'INDEX_SENTENCE_CITATIONS'],
+    diagram: {
+      nodes: [
+        ['n1', 'POST /runs (ASK)', 'Lock 5005 + SSE 2s', 'gw', 0, 0, '1'],
+        ['n2', 'History Snapshot', '6 turns <= 4500B JSONB', 'wrk', 1, 0, '2'],
+        ['n3', 'Rewrite Query (12s)', 'REWRITE_SYSTEM', 'wrk', 2, 0, '3'],
+        ['fb1', 'Fallback Raw Query', 'No history / Timeout', 'err', 2, 1, '3'],
+        ['d1', 'ask_citation_path?', 'single vs two vs legacy', 'decision', 3, 0, '4'],
+        ['n5', 'Compose + 1x REPAIR', 'UUID allowlist check', 'wrk', 4, 0, '5'],
+        ['n6', 'Pass 2 Attribute + PDF', '8s cap + merge_boxes', 'ui', 5, 0, '6'],
+        ['fb2', 'Keep Chunk Anchor', 'Pass 2 fail fallback', 'err', 5, 1, '6'],
+      ],
+      edges: [
+        ['n1', 'n2', 'Claim lease', 'main'],
+        ['n2', 'n3', 'Has history', 'main'],
+        ['n3', 'fb1', 'Timeout/Err', 'err'],
+        ['n3', 'd1', 'Search(limit=6)', 'main'],
+        ['fb1', 'd1', 'Search raw', 'branch'],
+        ['d1', 'n5', 'Pack prompt', 'main'],
+        ['n5', 'n6', 'path == two', 'main'],
+        ['n6', 'fb2', 'Timeout/Invalid', 'err'],
+      ]
+    },
+    steps: [
+      ['1', 'GW', 'Submit Ask & SSE', 'agent-orchestrator: start_run, run_events', 'mode="ASK", citation_mode (segment/chunk), Lock 5005', 'INSERT orchestration.runs (queued); tạo conversation mới nếu cần', '202 Accepted; Web mở EventSource poll DB mỗi 2s', 'Replay khác payload -> 409 idempotency_conflict'],
+      ['2', 'WRK', 'History Snapshot', 'worker.py: claim, load_history · history.py: prior_history', 'lease_id (TTL run+15s)', 'Lấy max 6 lượt ASK succeeded trước created_at (max 900 chars/turn, <= 4500 bytes); lưu cứng history_snapshot JSONB', 'Ngữ cảnh bất biến cho toàn bộ run & retry', 'Reclaim/Retry đọc lại snapshot, không query lại DB'],
+      ['3', 'WRK', 'Standalone Query Rewrite', 'worker.py: retrieval_query', 'REWRITE_SYSTEM, history', 'Timeout 12s gọi model-gateway -> SearchRewrite {query}', 'Query độc lập gửi Retrieval (include_segments=True)', 'Timeout/lỗi/không có lịch sử -> fallback câu hỏi gốc'],
+      ['4', 'WRK', 'Adaptive Citation Selector', 'worker.py: ask_citation_path, compose', 'citation_mode hoặc ASK_SENTENCE_CITATIONS', 'Pack 6 passages + history; nếu có segments & <= 32 labels & overhead <= 2048B -> single (PRIMARY_SEGMENT_SYSTEM), ngược lại -> two', 'Chọn chiến lược prompt tối ưu chi phí', 'Chunk chưa có map giữ dạng legacy chunk'],
+      ['5', 'WRK', 'Compose & UUID Validation', 'worker.py: compose · citations.py: resolve', 'GeneratedAskAnswer, max 1 lần REPAIR', 'Gọi model-gateway (retry_on_unavailable=True); kiểm tra mọi UUID thuộc cited allowlist; conversation claim có evidence=[]', 'Hydrate claims + citations', 'Vượt 1 lần repair -> StopRun("invalid_model_output")'],
+      ['6', 'UI', 'Two-Pass & PDF.js Highlight', 'worker.py: attribute · citations.py: attributed, merge_boxes · pdf-preview.tsx', 'Khi path == "two", timeout min(8s, rem-5s), 512 tokens', 'Pass 2 ATTRIBUTION_SYSTEM chọn segment_ids -> anchors() & merge_boxes() -> lưu DB -> PDF.js scrollIntoView & vẽ khung tô sáng', 'Trích dẫn chính xác tới từng câu/dòng', 'Lỗi Pass 2 giữ nguyên chunk citation gốc'],
+    ]
+  },
+  {
+    id: '10', domain: 'retrieval', domainLabel: 'Retrieval & Ask',
+    title: 'Flow 10 — Fault Classification & Context-Isolated Manual Retry',
+    summary: 'Thử lại nội tuyến 503 ở Model Gateway, phân loại lỗi thân thiện và retry thủ công giữ nguyên snapshot.',
+    flags: [],
+    diagram: {
+      nodes: [
+        ['n1', 'Gateway Completion', 'retry_on_unavailable 28s', 'svc', 0, 0, '1'],
+        ['r1', 'Inline Retry 0.25s', 'On upstream 503', 'svc', 0, 1, '1'],
+        ['n2', 'Classify & Mask', 'interaction_unavailable', 'wrk', 1, 0, '2'],
+        ['n3', 'User Clicks Retry', 'retry_of_run_id + new key', 'ui', 2, 0, '3'],
+        ['e1', '409 Context Conflict', 'Objective/conv mismatch', 'err', 2, 1, '3'],
+        ['ok', 'Snapshot Copied', 'In-place UI replacement', 'ok', 3, 0, '3'],
+      ],
+      edges: [
+        ['n1', 'r1', 'HTTP 503', 'err'],
+        ['r1', 'n2', 'Still 503', 'err'],
+        ['n2', 'n3', 'retryable=true', 'main'],
+        ['n3', 'e1', 'Tampered', 'err'],
+        ['n3', 'ok', 'Copy history_snapshot', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'SVC', 'Gateway 503 Inline Retry', 'model-gateway/app/main.py: completion', 'retry_on_unavailable=True (timeout tổng 28s)', 'Gặp 503 -> sleep 0.25s rồi gọi lại 1 lần; bắt content rỗng do reasoning tiêu thụ hết token', 'CompletionOutput hoặc 503 chat_provider_unavailable', 'Không log prompt/reasoning/credentials'],
+      ['2', 'WRK', 'Classify & Mask Error', 'worker.py: complete · main.py: RUN_FIELDS', '503 hoặc invalid_model_output', 'DB lưu ask_completion_unavailable; API public chiếu thành error_code="interaction_unavailable", retryable=true', 'UI hiện thông báo lỗi + nút Retry (RotateCw)', 'Lỗi cost_limit/time_limit có retryable=false'],
+      ['3', 'UI', 'Context-Isolated Retry', 'main.py: retry_context · interaction-panel.tsx: retry', 'retry_of_run_id, Idempotency-Key mới', 'Khóa FOR UPDATE run cha; verify objective/conversation/citation_mode khớp; copy history_snapshot sang run mới', 'Thay thế card lỗi tại chỗ trên UI (in-place)', 'Sai lệch payload -> 409 retry_context_conflict'],
+    ]
+  },
+  {
+    id: '11', domain: 'agentic', domainLabel: 'Agentic Workflows',
+    title: 'Flow 11 — Plan State Machine, Optimistic Locking & Step Recovery',
+    summary: 'Chu trình REVIEW -> ACCEPTED -> EXECUTING với khóa lạc quan, FK acceptances và khôi phục theo từng step.',
+    flags: ['AGENTIC_WORKFLOW_ENABLED'],
+    diagram: {
+      nodes: [
+        ['n1', 'POST /plans (v1)', '2-step or 1-6 custom', 'svc', 0, 0, '1'],
+        ['n1r', 'PATCH / Regenerate', 'expected_version -> v2', 'svc', 0, 1, '1'],
+        ['e1', '409 stale_version', 'Version mismatch', 'err', 1, 1, '1'],
+        ['n2', 'POST /accept', 'orchestration.acceptances', 'svc', 1, 0, '2'],
+        ['n3', 'POST /runs (PLAN)', 'FK -> acceptances', 'wrk', 2, 0, '3'],
+        ['ok', 'Step Recovery Loop', 'Skip succeeded run_steps', 'ok', 3, 0, '3'],
+      ],
+      edges: [
+        ['n1', 'n1r', 'Edit/Regen', 'branch'],
+        ['n1r', 'n1', 'New REVIEW', 'loop'],
+        ['n1r', 'e1', 'Stale', 'err'],
+        ['n1', 'n2', 'Approve', 'main'],
+        ['n2', 'n3', 'Start run', 'main'],
+        ['n3', 'ok', 'Save each step', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'SVC', 'Create / Revise Plan', 'agent-orchestrator/app/main.py: create_plan, revise, regenerate_plan', 'PlanDefinition (1–6 steps nếu AGENTIC_WORKFLOW_ENABLED=true, step cuối tool="compose")', 'INSERT/UPDATE plans & plan_versions; edit dùng FOR UPDATE check expected_version', 'state="REVIEW", tăng current_version', 'Sai version -> 409 stale_plan_version; sửa/regen hủy hiệu lực accept cũ'],
+      ['2', 'SVC', 'Acceptance Gating', 'main.py: accept_plan, pinned_objective', 'Version(plan_version), Idempotency-Key', 'INSERT orchestration.acceptances(plan_id, version, user_id, request_key)', 'state="ACCEPTED"', 'DB ép Foreign Key (plan_id, plan_version) -> acceptances'],
+      ['3', 'WRK', 'Workflow Execution & Recovery', 'worker.py: execute_workflow, save_step', 'mode="PLAN", plan_id, plan_version', 'Đọc step đã succeeded từ orchestration.run_steps; mỗi step check current() + validate_sources(); định tuyến CitedDraft/ResearchGraph', 'Lưu run_steps sau mỗi bước thành công', 'Crash giữa step 2 -> worker mới nhảy qua step 1 đã lưu'],
+    ]
+  },
+  {
+    id: '12', domain: 'agentic', domainLabel: 'Agentic Workflows',
+    title: 'Flow 12 — Async Curriculum Planner (PLAN + LEARN + study_guide)',
+    summary: 'Lập lịch học tập 1–6 ngày bất đồng bộ với lease heartbeat 5s, kiểm tra phủ đủ ngày và trích dẫn hợp lệ.',
+    flags: ['AGENTIC_CURRICULUM_ENABLED', 'AGENTIC_WORKFLOW_ENABLED'],
+    diagram: {
+      nodes: [
+        ['n1', 'POST /plans (days 1..6)', 'plan_drafts -> GENERATING', 'svc', 0, 0, '1'],
+        ['n2', 'Claim + Heartbeat 5s', 'Lease 20s SKIP LOCKED', 'wrk', 1, 0, '2'],
+        ['n3', 'Inspect & Validate', 'Search + All days 1..N', 'wrk', 2, 0, '3'],
+        ['e1', 'scope_not_found', 'Missing topic / cancel', 'err', 2, 1, '3'],
+        ['n4', 'Serialized Publish', 'plans FOR UPDATE -> REVIEW', 'wrk', 3, 0, '4'],
+        ['ok', 'Accept & Start', 'Sequential execution', 'ok', 4, 0, '4'],
+      ],
+      edges: [
+        ['n1', 'n2', 'UI poll 1s->5s', 'main'],
+        ['n2', 'n3', 'Active draft', 'main'],
+        ['n3', 'e1', 'Not found', 'err'],
+        ['n3', 'n4', 'Valid schedule', 'main'],
+        ['n4', 'ok', 'workflow saved', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'SVC', 'Enqueue Draft Job', 'main.py: create_plan, add_revision', 'curriculum_days (1–6), steps=None, cả 2 flags bật', 'INSERT orchestration.plan_drafts(plan_id, version, days)', 'state="GENERATING"; UI poll 1s->5s + lưu sessionStorage', 'Bấm Accept khi chưa xong -> 409'],
+      ['2', 'WRK', 'Claim & Heartbeat', 'curriculum.py: CurriculumWorker.claim, heartbeat', 'FOR UPDATE OF d SKIP LOCKED', 'Lease 20s, task nền gia hạn lease mỗi 5s', 'plan_drafts.status="running"', 'Bị revise/cancel khi đang chạy -> hủy publish (draft_superseded)'],
+      ['3', 'WRK', 'Inspect & Validate Schedule', 'curriculum.py: generate, validated_schedule', 'objective.query, days', 'Search retrieval (limit=6); Model sinh GeneratedCurriculum; check phủ đủ 1..days theo thứ tự, UUID thuộc evidence', 'Chuyển đổi thành WorkflowStep[] có day & citations', 'Không thấy chủ đề -> curriculum_scope_not_found'],
+      ['4', 'WRK', 'Serialized Publication', 'curriculum.py: finish', 'Lock FOR UPDATE trên orchestration.plans', 'UPDATE plan_versions SET workflow=... (chỉ khi chưa accept); plan_drafts="succeeded"', 'Plan chuyển sang REVIEW cho user duyệt/Start', 'Start thực thi tuần tự từng hoạt động học tập'],
+    ]
+  },
+  {
+    id: '13', domain: 'agentic', domainLabel: 'Agentic Workflows',
+    title: 'Flow 13 — Socratic Tutor (ASK + LEARN + socratic_tutor)',
+    summary: 'Gia sư đối thoại Socratic phân tích lỗi sai học viên và dẫn 1 câu hỏi gợi mở có trích dẫn.',
+    flags: ['AGENTIC_TUTOR_ENABLED'],
+    diagram: {
+      nodes: [
+        ['n1', 'POST /runs (ASK Tutor)', 'guide | hint | solution', 'svc', 0, 0, '1'],
+        ['e1', '422 Rejected', 'PLAN / AGENT disallowed', 'err', 0, 1, '1'],
+        ['n2', 'History + Search', 'Include tutor_question', 'wrk', 1, 0, '1'],
+        ['d1', 'tutor_action?', 'Check rule', 'decision', 2, 0, '2'],
+        ['n3a', 'Guide / Hint', '1 Question (?) + Citations', 'ok', 3, 0, '2'],
+        ['n3b', 'Solution', 'question=null + Doc Proof', 'ok', 3, 1, '2'],
+      ],
+      edges: [
+        ['n1', 'e1', 'Non-ASK', 'err'],
+        ['n1', 'n2', 'ASK allowed', 'main'],
+        ['n2', 'd1', 'compose()', 'main'],
+        ['d1', 'n3a', 'guide/hint', 'main'],
+        ['d1', 'n3b', 'solution', 'branch'],
+      ]
+    },
+    steps: [
+      ['1', 'SVC', 'Route & Mode Gate', 'main.py: start_run · types.py: StartRun', 'mode="ASK", task="socratic_tutor", tutor_action (guide/hint/solution), AGENTIC_TUTOR_ENABLED=true', 'prior_history tải cả claims[*].text và tutor_question các lượt trước', 'Mở phiên học đối thoại riêng tư', 'Gửi ở PLAN/AGENT -> 422 rejected'],
+      ['2', 'WRK', 'Tutor Compose & Guard', 'worker.py: compose (is_tutor=True)', 'GeneratedTutorAnswer (claims + question)', 'guide/hint bắt buộc có đúng 1 câu hỏi (?); solution bắt buộc question=null + document claim có trích dẫn', 'Phản hồi phân tích lỗi sai + câu hỏi gợi mở kèm citation pill', 'Cấm trích dẫn câu sai của học viên làm bằng chứng sách; loại khỏi shared artifact'],
+    ]
+  },
+  {
+    id: '14', domain: 'agentic', domainLabel: 'Agentic Workflows',
+    title: 'Flow 14 — LangGraph Research Matrix (2–5 Papers)',
+    summary: 'Đồ thị LangGraph 7 node với checkpoint PostgreSQL, chấm điểm từng bài báo, sửa lỗ hổng gap search và kiểm định ngữ nghĩa.',
+    flags: ['AGENTIC_RESEARCH_ENABLED'],
+    diagram: {
+      nodes: [
+        ['n1', 'Gate + Checkpoint', '2–5 docs + research_progress', 'svc', 0, 0, '1'],
+        ['e1', '422 Source Limit', '1 or >5 docs', 'err', 0, 1, '1'],
+        ['n2', 'decompose -> retrieve', '1-4 criteria; per-paper', 'wrk', 1, 0, '2'],
+        ['n3', 'grade -> verify_cells', 'balanced_ctx + SHA256 cache', 'wrk', 2, 0, '3'],
+        ['d1', 'next_node: gap < 2?', 'Missing cell check', 'decision', 3, 0, '4'],
+        ['n4', 'fill_gap', 'Prioritize gap evidence', 'wrk', 3, 1, '4'],
+        ['n5', 'synthesize -> verify', '1x bounded repair', 'ok', 4, 0, '5'],
+        ['e2', 'Partial Findings', 'budget_exhausted stop', 'err', 4, 1, '5'],
+      ],
+      edges: [
+        ['n1', 'e1', 'Invalid count', 'err'],
+        ['n1', 'n2', 'Start Graph', 'main'],
+        ['n2', 'n3', 'Checkpoint/doc', 'main'],
+        ['n3', 'd1', 'Cells graded', 'main'],
+        ['d1', 'n4', 'Yes (gap<2)', 'branch'],
+        ['n4', 'n3', 'Re-grade doc', 'loop'],
+        ['d1', 'n5', 'No / Done', 'main'],
+        ['n5', 'e2', 'Budget limit', 'err'],
+      ]
+    },
+    steps: [
+      ['1', 'SVC', 'Gate & Checkpoint Load', 'main.py: start_run · research.py: ResearchGraph.execute', 'AGENT/PLAN + RESEARCH + comparison/evidence_table/synthesis + 2–5 docs', 'Đọc/ghi checkpoint orchestration.research_progress; mọi node kiểm tra current() + validate_sources()', 'Chạy StateGraph (recursion_limit=18)', 'Ngoài 2–5 docs -> 422; crash khôi phục tại node dở dang'],
+      ['2', 'WRK', 'decompose -> retrieve', 'research.py: decompose, retrieve · worker.py: retrieve', '1–4 criteria (Decomposition)', 'Tìm kiếm riêng từng paper (research_searches < docs + 2); lưu checkpoint sau từng paper', 'evidence[doc_id] cân bằng theo từng bài báo', 'Vượt hạn mức search -> StopRun("generation_budget")'],
+      ['3', 'WRK', 'grade -> verify_cells', 'research.py: grade, verify_cells, balanced_context', 'balanced_context chia đều quota bytes cho mỗi bài', 'Chấm ma trận paper × criterion (Grading) -> verify_cells kiểm tra ngữ nghĩa (cache SHA-256)', 'Ma trận cells (supported / contradicted / insufficient)', 'Sai số liệu/đơn vị dù đúng UUID -> hạ xuống insufficient'],
+      ['4', 'WRK', 'Conditional fill_gap', 'research.py: next_node, fill_gap', 'gap_calls < 2 và còn ô insufficient chưa thử', 'Retrieve riêng ô thiếu (research_gap=true), ưu tiên chèn lên đầu evidence[doc]; chấm lại đúng paper đó', 'Quay lại grade -> verify_cells', 'Hết 2 lần gap hoặc hết ô thiếu -> chuyển synthesize'],
+      ['5', 'WRK', 'synthesize -> verify', 'research.py: synthesize, verify', 'Chỉ dùng các cell != insufficient', 'Tổng hợp CandidateAnswer (bỏ claim không evidence); verify ngữ nghĩa lần cuối + tối đa 1 repair', 'claims + evidence_matrix (có budget_exhausted nếu cạn ngân sách)', 'Vượt token/cost/time trả partial findings đã kiểm chứng'],
+    ]
+  },
+  {
+    id: '15', domain: 'agentic', domainLabel: 'Agentic Workflows',
+    title: 'Flow 15 — Verified Academic Writing (CitedDraft LangGraph)',
+    summary: 'Soạn thảo học thuật tự động xác minh từng luận điểm số liệu/đơn vị và sửa chữa có giới hạn trước khi lưu.',
+    flags: ['AGENTIC_WRITING_ENABLED'],
+    diagram: {
+      nodes: [
+        ['n1', 'CitedDraft: retrieve', 'Selected sources', 'wrk', 0, 0, '1'],
+        ['n2', 'draft (Base)', 'Preserve numbers/units', 'wrk', 1, 0, '2'],
+        ['n3', 'verify (Pass 1)', 'Keep supported claims', 'wrk', 2, 0, '2'],
+        ['n4', 'draft(repair=True)', 'Fill missing facts', 'wrk', 3, 0, '2'],
+        ['ok', 'verify (Pass 2)', 'verified_draft=true Preview', 'ok', 4, 0, '2'],
+      ],
+      edges: [
+        ['n1', 'n2', 'balanced_context', 'main'],
+        ['n2', 'n3', 'allow_repair=false', 'main'],
+        ['n3', 'n4', 'Keep verified', 'main'],
+        ['n4', 'ok', 'Re-verify', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'WRK', 'Graph Init & Retrieve', 'writing.py: CitedDraft (kế thừa ResearchGraph)', 'AGENT/PLAN + WRITE + draft + AGENTIC_WRITING_ENABLED=true', 'Retrieve evidence cho các document_ids hoặc nhận từ step trước; tính vào research budgets', 'state.evidence theo từng tài liệu', 'Giới hạn 12 model calls / 16384 output tokens'],
+      ['2', 'WRK', 'Draft -> Verify + Repair', 'writing.py: draft, verify', 'balanced_context', 'Sinh đoạn văn học thuật -> super().verify(allow_repair=False) bảo lưu claim đạt -> draft(repair=True) bù phần thiếu -> verify lại', '{kind:"draft", claims, verified_draft:true} (Preview trước khi Save)', 'Claim không chứng minh được bị loại bỏ hoàn toàn'],
+    ]
+  },
+  {
+    id: '16', domain: 'agentic', domainLabel: 'Agentic Workflows',
+    title: 'Flow 16 — Private Mock Defense (ASK + RESEARCH + mock_defense)',
+    summary: 'Mô phỏng hội đồng phản biện riêng tư trên bản nháp, tách biệt neo draft và neo nguồn phản chứng.',
+    flags: ['AGENTIC_DEFENSE_ENABLED'],
+    diagram: {
+      nodes: [
+        ['n1', 'Split Retrieve', 'target(draft) vs counter', 'wrk', 0, 0, '1'],
+        ['e1', '422 Rejected', 'PLAN/AGENT or bad draft', 'err', 0, 1, '1'],
+        ['n2', 'DefenseTurn LLM', 'Classify + 1 Question (?)', 'wrk', 1, 0, '2'],
+        ['d1', 'contradicted?', 'Require counter_ids', 'decision', 2, 0, '2'],
+        ['n3', 'CounterCheck LLM', 'Verify units & context', 'wrk', 3, 0, '2'],
+        ['ok', 'Defense Review', 'Split Target/Counter Pills', 'ok', 4, 0, '2'],
+      ],
+      edges: [
+        ['n1', 'e1', 'Invalid scope', 'err'],
+        ['n1', 'n2', 'balanced_ctx', 'main'],
+        ['n2', 'd1', 'DefenseTurn', 'main'],
+        ['d1', 'n3', 'Yes', 'branch'],
+        ['d1', 'ok', 'Other classes', 'main'],
+        ['n3', 'ok', 'contradicted=true', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'WRK', 'Target & Counter Retrieve', 'defense.py: defend · types.py: Objective', 'mode="ASK", task="mock_defense", draft_document_id trong scope, AGENTIC_DEFENSE_ENABLED=true', 'Tìm kiếm tách biệt: target (draft) và counter (các nguồn còn lại)', 'balanced_context phân tách target vs counter', 'Gửi ở PLAN/AGENT hoặc draft ngoài scope -> 422'],
+      ['2', 'WRK', 'Defense & CounterCheck', 'defense.py: defend (DefenseTurn, CounterCheck)', 'history riêng tư', 'Phân loại missing_citation / contradicted / unsupported_assumption / clarification; nếu contradicted gọi thêm CounterCheck xác thực mâu thuẫn', 'tutor_question + defense_review tách target_citations & counter_citations', 'Câu trả lời của sinh viên giữ riêng tư, không export sang artifact'],
+    ]
+  },
+  {
+    id: '17', domain: 'learning', domainLabel: 'Artifacts & Learning',
+    title: 'Flow 17 — Artifact Publishing & MD/DOCX Export',
+    summary: 'Xuất bản câu trả lời thành tài liệu dùng chung, tước bỏ dữ liệu riêng tư và kiểm tra nguồn còn tồn tại.',
+    flags: [],
+    diagram: {
+      nodes: [
+        ['n1', 'Sanitize Run', 'Strip chat/tutor/defense', 'svc', 0, 0, '1'],
+        ['e1', '403 / 409 empty', 'VIEWER / No doc claims', 'err', 0, 1, '1'],
+        ['n2', 'visible_sources + Save', 'INSERT artifacts.items', 'svc', 1, 0, '2'],
+        ['e2', '409 source_unavail', 'Source deleted', 'err', 1, 1, '2'],
+        ['n3', 'Detail & Export', 'Markdown / python-docx', 'svc', 2, 0, '3'],
+        ['ok', 'Artifact File Ready', '.md / .docx download', 'ok', 3, 0, '3'],
+      ],
+      edges: [
+        ['n1', 'e1', 'Empty / Denied', 'err'],
+        ['n1', 'n2', 'Grounded claims', 'main'],
+        ['n2', 'e2', 'Deleted doc', 'err'],
+        ['n2', 'n3', '201 Saved', 'main'],
+        ['n3', 'ok', 'Re-check sources', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'SVC', 'Sanitize Run Output', 'artifact-service: publish · orchestrator: artifact_run', 'OWNER hoặc EDITOR (VIEWER -> 403)', 'GET /internal/v1/.../artifact-runs/{run_id}; lọc bỏ source="conversation", tutor_question, defense_review', 'body chỉ gồm các claim có trích dẫn tài liệu', 'Không còn claim hợp lệ -> 409 empty_artifact'],
+      ['2', 'SVC', 'Visibility & Persist', 'artifact-service: visible_sources, publish', 'source_ids trích từ citations', 'Verify tất cả tài liệu nguồn còn sẵn sàng qua document-service; INSERT artifacts.items (idempotent theo workspace_id, run_id)', '201 Created (snapshot bất biến qua reindex)', 'Có nguồn đã bị xóa/thu hồi -> 409 source_unavailable'],
+      ['3', 'SVC', 'Detail & Export', 'artifact-service: detail, export, make_docx', 'Mọi member (VIEWER được đọc/export)', 'Kiểm tra lại visible_sources; xuất Markdown hoặc python-docx qua threadpool', 'Tải xuống artifact-{id}.md hoặc .docx', 'Nguồn bị xóa sau khi tạo -> 409 (chống rò rỉ dữ liệu đã xóa)'],
+    ]
+  },
+  {
+    id: '18', domain: 'learning', domainLabel: 'Artifacts & Learning',
+    title: 'Flow 18 — Adaptive Flashcards với FSRS (StudyDeck)',
+    summary: 'Ôn tập ngắt quãng FSRS 6.3.3 riêng tư cho từng user dựa trên bộ thẻ bài chia sẻ chung.',
+    flags: ['ADAPTIVE_FLASHCARDS_ENABLED'],
+    diagram: {
+      nodes: [
+        ['n1', 'Deck Projection', 'UUIDv5 card + card_states', 'svc', 0, 0, '1'],
+        ['n2', 'StudyDeck UI', 'Flip & Rate 1..4 (UTC)', 'ui', 1, 0, '2'],
+        ['n3', 'FSRS Review API', 'Locks 6301/6302 + FSRS 6.3', 'svc', 2, 0, '2'],
+        ['e1', '409 Version/Clock', 'stale_card / clock err', 'err', 2, 1, '2'],
+        ['ok', 'Due Updated (UTC)', 'Private schedule saved', 'ok', 3, 0, '2'],
+      ],
+      edges: [
+        ['n1', 'n2', 'GET /cards', 'main'],
+        ['n2', 'n3', 'POST /reviews', 'main'],
+        ['n3', 'e1', 'Conflict', 'err'],
+        ['n3', 'ok', 'version+1', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'SVC', 'Card Projection & Deck', 'artifact-service/learning.py: flashcards · reviews.py: deck', 'ADAPTIVE_FLASHCARDS_ENABLED=true, kind="flashcards"', 'Sinh card_id UUIDv5 từ artifact_id + nội dung thẻ; join artifacts.card_states riêng cho từng (artifact_id, user_id)', 'Danh sách DueCard kèm version, due_at (UTC), citations', 'VIEWER vẫn ôn tập riêng tư mà không sửa đổi artifact chung'],
+      ['2', 'UI', 'Private FSRS Review', 'reviews.py: review · study-deck.tsx: StudyDeck', 'rating (1..4), expected_version, Idempotency-Key', 'Lock 6301 (idempotency card_reviews) + Lock 6302 (card_states FOR UPDATE); chạy fsrs.Scheduler(enable_fuzzing=False)', 'Tăng version, cập nhật lịch due UTC; UI ẩn thẻ vừa ôn', 'Lệch version -> 409 stale_card_version; đồng hồ lùi -> 409'],
+    ]
+  },
+  {
+    id: '19', domain: 'learning', domainLabel: 'Artifacts & Learning',
+    title: 'Flow 19 — Interactive Concept Map (ConceptMap SVG)',
+    summary: 'Chuẩn hóa danh sách quan hệ thành đồ thị khái niệm tương tác an toàn không thực thi markup từ model.',
+    flags: ['INTERACTIVE_CONCEPT_MAP_ENABLED'],
+    diagram: {
+      nodes: [
+        ['n1', 'concept_map()', 'NFC normalize <= 100 claims', 'svc', 0, 0, '1'],
+        ['n2', 'ConceptMap SVG', '3-col <=200 nodes, cycle-safe', 'ui', 1, 0, '2'],
+        ['ok1', '1 Source -> PDF Page', 'Jump immediately', 'ok', 2, 0, '2'],
+        ['ok2', 'N Sources -> Pills', 'Inspect & choose pill', 'ok', 2, 1, '2'],
+      ],
+      edges: [
+        ['n1', 'n2', '{nodes, edges}', 'main'],
+        ['n2', 'ok1', 'Click / Enter (1)', 'main'],
+        ['n2', 'ok2', 'Click / Enter (>1)', 'branch'],
+      ]
+    },
+    steps: [
+      ['1', 'SVC', 'Normalize Graph', 'artifact-service/learning.py: concept_map · main.py: detail', 'kind="mind_map", INTERACTIVE_CONCEPT_MAP_ENABLED=true', 'Chuẩn hóa Unicode NFC/casefold tối đa 100 claims thành nodes (stable_id) & edges; gộp multi-citations per node', 'Trả concept_map {nodes, edges}', 'Flag tắt -> concept_map: null'],
+      ['2', 'UI', 'Cycle-Safe SVG & Nav', 'apps/web/.../concept-map.tsx: ConceptMap', 'React + SVG thuần', 'Render lưới 3 cột tối đa 200 nodes, hỗ trợ chu trình/self-loop, điều hướng bàn phím Tab + Enter/Space', 'Click node 1 nguồn nhảy thẳng PDF; nhiều nguồn mở danh sách pill', 'Nguồn bị thu hồi -> backend chặn 409'],
+    ]
+  },
+  {
+    id: '20', domain: 'learning', domainLabel: 'Artifacts & Learning',
+    title: 'Flow 20 — Crossref Source Discovery & Reference Library',
+    summary: 'Tìm kiếm học liệu ngoài qua Crossref sau khi người dùng duyệt thủ công, lưu thư viện và xuất BibTeX.',
+    flags: ['AGENTIC_DISCOVERY_ENABLED'],
+    diagram: {
+      nodes: [
+        ['n1', 'Approve Search UI', 'User edits query (<=200)', 'ui', 0, 0, '1'],
+        ['n2', 'Crossref API (10s)', 'normalize() metadata only', 'svc', 1, 0, '1'],
+        ['e1', '503 Unavailable', 'Timeout / 429', 'err', 1, 1, '1'],
+        ['n3', 'Save / Remove / .bib', 'Upsert (ws, doi) + tags', 'svc', 2, 0, '2'],
+        ['e2', '403 Forbidden', 'VIEWER save/remove', 'err', 2, 1, '2'],
+      ],
+      edges: [
+        ['n1', 'n2', 'POST /discover', 'main'],
+        ['n2', 'e1', 'Error', 'err'],
+        ['n2', 'n3', 'Explicit Save/Export', 'main'],
+        ['n3', 'e2', 'VIEWER', 'err'],
+      ]
+    },
+    steps: [
+      ['1', 'UI', 'Approval-Gated Discover', 'source-discovery.tsx · workspace-service: discover', 'Bấm "Approve Crossref search" (query 1–200 chars đã duyệt)', 'GET https://api.crossref.org/works (timeout 10s), normalize DOI/title/authors/year', 'Trả metadata Reference (tuyệt đối không tự vào RAG)', 'Crossref lỗi/429 -> 503 discovery_unavailable'],
+      ['2', 'SVC', 'Save, Remove & BibTeX', 'workspace-service: save_reference, export_references, remove_reference', 'OWNER/EDITOR (lưu/xóa); mọi member (đọc/export)', 'Upsert workspace.reference_items theo (workspace_id, doi); xuất .bib qua research.py:bibtex', 'Lưu tham khảo kèm tags hoặc tải references.bib', 'VIEWER lưu/xóa -> 403 forbidden'],
+    ]
+  },
+  {
+    id: '21', domain: 'learning', domainLabel: 'Artifacts & Learning',
+    title: 'Flow 21 — Document Reader & Personal Annotations',
+    summary: 'Xem PDF/DOCX bảo vệ qua Range stream và quản lý ghi chú/highlight vùng tọa độ riêng tư.',
+    flags: [],
+    diagram: {
+      nodes: [
+        ['n1', 'PdfPreview Stream', 'HEAD + Range MinIO', 'ui', 0, 0, '1'],
+        ['e1', '409 preview_unavail', 'DOCX converting', 'err', 0, 1, '1'],
+        ['n2', 'Canvas + Citations', 'pdfjs-dist + Box Overlay', 'ui', 1, 0, '1'],
+        ['n3', 'Personal Annotations', 'documents.annotations CRUD', 'svc', 2, 0, '2'],
+        ['ok', 'Private Notes Saved', 'Scoped (ws, doc, user)', 'ok', 3, 0, '2'],
+      ],
+      edges: [
+        ['n1', 'e1', 'Not ready', 'err'],
+        ['n1', 'n2', 'PDF bytes', 'main'],
+        ['n2', 'n3', 'GET/POST/DEL', 'main'],
+        ['n3', 'ok', 'Persisted', 'main'],
+      ]
+    },
+    steps: [
+      ['1', 'UI', 'Protected PDF Stream', 'document-service: preview, original · pdf-preview.tsx: PdfPreview', 'Member workspace; HEAD probe + Range requests', 'Đọc MinIO -> render pdfjs-dist Canvas; overlay citationBoxes (citationRegions / citationRegion)', 'Xem trang, tìm chữ trong PDF, auto scroll tới highlight', 'DOCX chưa convert xong -> 409 preview_unavailable'],
+      ['2', 'SVC', 'Private Annotations', 'document-service: list_annotations, annotate · annotated-preview.tsx', 'page >= 1, body và/hoặc region [0,1]', 'CRUD trên documents.annotations lọc chặt theo (workspace_id, document_id, user_id)', 'Ghi chú/highlight riêng tư, bền vững sau reload', 'Xóa tài liệu/workspace tự động xóa hết annotations'],
+    ]
+  }
+];
+
+const MATRIX = [
+  ['LEARN', 'answer', '✅', '✅', '✅', 'ASK: History + Rewrite + Adaptive Citations (segment/chunk). PLAN/AGENT: Retrieve + Compose'],
+  ['LEARN', 'explanation', '✅', '✅', '✅', 'Retrieve + Compose (OUTPUTS["explanation"])'],
+  ['LEARN', 'study_guide', '✅', '✅', '✅', 'PLAN + curriculum_days (1–6) -> CurriculumWorker (AGENTIC_CURRICULUM_ENABLED + AGENTIC_WORKFLOW_ENABLED)'],
+  ['LEARN', 'quiz', '✅', '✅', '✅', 'FIELD_KEYS["quiz"] = {question, options, answer}'],
+  ['LEARN', 'flashcards', '✅', '✅', '✅', 'FIELD_KEYS["flashcards"] = {front, back} -> FSRS StudyDeck (ADAPTIVE_FLASHCARDS_ENABLED)'],
+  ['LEARN', 'mind_map', '✅', '✅', '✅', 'FIELD_KEYS["mind_map"] = {parent, child, relationship} -> ConceptMap SVG (INTERACTIVE_CONCEPT_MAP_ENABLED)'],
+  ['LEARN', 'socratic_tutor', '✅', '❌ 422', '❌ 422', 'ASK-only (AGENTIC_TUTOR_ENABLED), tutor_action: guide/hint/solution, 1 câu hỏi (?)'],
+  ['RESEARCH', 'answer', '✅', '✅', '✅', 'Standard Retrieve + Compose'],
+  ['RESEARCH', 'comparison', '✅', '✅', '✅', 'AGENT/PLAN + AGENTIC_RESEARCH_ENABLED + 2–5 docs -> LangGraph ResearchGraph'],
+  ['RESEARCH', 'evidence_table', '✅', '✅', '✅', 'FIELD_KEYS {source, method, outcome, limitations}; AGENT/PLAN (2–5 docs) -> ResearchGraph'],
+  ['RESEARCH', 'synthesis', '✅', '✅', '✅', 'AGENT/PLAN + AGENTIC_RESEARCH_ENABLED + 2–5 docs -> LangGraph ResearchGraph'],
+  ['RESEARCH', 'screening', '✅', '✅', '✅', 'FIELD_KEYS["screening"] = {source, decision, reason}'],
+  ['RESEARCH', 'extraction', '✅', '✅', '✅', 'FIELD_KEYS["extraction"] = {source, field, value}'],
+  ['RESEARCH', 'mock_defense', '✅', '❌ 422', '❌ 422', 'ASK-only (AGENTIC_DEFENSE_ENABLED), draft_document_id in scope -> defense.py + CounterCheck'],
+  ['WRITE', 'answer', '✅', '✅', '✅', 'Standard Retrieve + Compose'],
+  ['WRITE', 'draft', '✅', '✅', '✅', 'AGENT/PLAN + AGENTIC_WRITING_ENABLED -> LangGraph CitedDraft (verified_draft=true)'],
+  ['WRITE', 'rewrite', '✅', '✅', '✅', 'Standard Retrieve + Compose (OUTPUTS["rewrite"])'],
+  ['WRITE', 'summary', '✅', '✅', '✅', 'Standard Retrieve + Compose (OUTPUTS["summary"])'],
+  ['WRITE', 'citation_review', '✅', '✅', '✅', 'Standard Retrieve + Compose (OUTPUTS["citation_review"])'],
+];
+
+const FLAGS = [
+  ['INDEX_SENTENCE_CITATIONS', 'false', 'document-parser', 'Bật Geometry(pdf) trích xuất tọa độ câu citation_segments_v1 khi parse PDF mới'],
+  ['ASK_SENTENCE_CITATIONS', 'legacy', 'agent-orchestrator', 'Giá trị dự phòng khi request Ask không truyền citation_mode (legacy | auto | single | two)'],
+  ['AGENTIC_WORKFLOW_ENABLED', 'false', 'agent-orchestrator', 'Bật custom 1–6 steps trong PlanDefinition (409 feature_disabled khi tắt)'],
+  ['AGENTIC_CURRICULUM_ENABLED', 'false', 'agent-orchestrator', 'Cùng AGENTIC_WORKFLOW_ENABLED, kích hoạt CurriculumWorker cho PLAN + LEARN + study_guide'],
+  ['AGENTIC_TUTOR_ENABLED', 'false', 'agent-orchestrator', 'Bật chế độ socratic_tutor trong ASK'],
+  ['AGENTIC_RESEARCH_ENABLED', 'false', 'agent-orchestrator', 'Định tuyến AGENT/PLAN + RESEARCH (comparison, evidence_table, synthesis, 2–5 docs) qua ResearchGraph'],
+  ['AGENTIC_WRITING_ENABLED', 'false', 'agent-orchestrator', 'Định tuyến AGENT/PLAN + WRITE + draft qua CitedDraft'],
+  ['AGENTIC_DEFENSE_ENABLED', 'false', 'agent-orchestrator', 'Bật chế độ mock_defense trong ASK'],
+  ['AGENTIC_DISCOVERY_ENABLED', 'false', 'agent-orchestrator', 'Công bố cờ discovery qua /workflow-features để UI hiển thị tìm Crossref khi thiếu bằng chứng'],
+  ['ADAPTIVE_FLASHCARDS_ENABLED', 'false', 'artifact-service', 'Bật API thẻ ôn tập FSRS 6.3.3 (/cards, /reviews)'],
+  ['INTERACTIVE_CONCEPT_MAP_ENABLED', 'false', 'artifact-service', 'Sinh đồ thị concept_map (nodes/edges) cho artifact mind_map'],
+];
+
+const LOCKS = [
+  ['PG Advisory Lock 710109', '710109', 'auth-service', 'Tuần tự hóa thao tác admin thay đổi role hoặc disable tài khoản'],
+  ['PG Advisory Lock 2002', 'hashtextextended(ws, 2002)', 'document-service', 'Đồng bộ upload reservation, xóa tài liệu và dọn dẹp workspace'],
+  ['PG Advisory Lock 2003', 'hashtextextended(ws, 2003)', 'ingestion-service', 'Đồng bộ RabbitMQ lifecycle event, batch publication và reindex.py'],
+  ['PG Advisory Lock 5005', 'hashtextextended(ws:user:key, 5005)', 'agent-orchestrator', 'Bảo vệ idempotency khi POST /runs'],
+  ['PG Advisory Locks 6301 / 6302', 'hashtextextended(user:key / user:art:card)', 'artifact-service', 'Bảo vệ idempotency review FSRS và lock card_states'],
+  ['RuntimeBudgets', 'parse=300s, embed=60s, index=1800s, run=210s, batch=16', 'shared/rag_runtime.py', 'Startup invariant: index > parse_caller + embedding_caller + 30; run > search_caller + 75'],
+  ['Worker & Research Caps', 'max_tokens=800, max_input=14KB, research_calls<12, gap<2', 'agent-orchestrator', 'Giới hạn chặt số lần gọi model, output tokens, chi phí micro-USD và gap search'],
+];
+
+const layerClass = l => ({UI:'l-ui', GW:'l-gw', SVC:'l-svc', WRK:'l-wrk'}[l] || 'l-err');
+const nodeColors = kind => ({
+  ui: { fill: 'var(--info-soft)', stroke: 'var(--info)' },
+  gw: { fill: 'var(--accent-soft)', stroke: 'var(--accent)' },
+  svc: { fill: 'var(--surface)', stroke: 'var(--ok)' },
+  wrk: { fill: 'var(--warn-soft)', stroke: 'var(--warn)' },
+  decision: { fill: 'var(--surface-subtle)', stroke: 'var(--accent)' },
+  err: { fill: 'var(--danger-soft)', stroke: 'var(--danger)' },
+  ok: { fill: 'var(--ok-soft)', stroke: 'var(--ok)' },
+}[kind] || { fill: 'var(--surface)', stroke: 'var(--border-strong)' });
+
+let activeDomain = 'all';
+let activeServiceKw = '';
+let searchTerm = '';
+const collapsed = new Set();
+const flowUIState = {}; // flowId -> { mode: 'both'|'diagram'|'grid', showErrors: true, activeStep: null, zoom: 1, timer: null }
+
+function getFlowState(id) {
+  return (flowUIState[id] ||= { mode: 'both', showErrors: true, activeStep: null, zoom: 1, timer: null });
+}
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderTopology() {
+  const wrap = document.getElementById('topoCanvas');
+  const map = Object.fromEntries(TOPO_NODES.map(n => [n.id, n]));
+  const W = 165, H = 50;
+  const edgesSvg = TOPO_EDGES.map(([a, b]) => {
+    const na = map[a], nb = map[b];
+    const x1 = na.x + W, y1 = na.y + H / 2;
+    const x2 = nb.x, y2 = nb.y + H / 2;
+    const active = activeServiceKw && (na.kw === activeServiceKw || nb.kw === activeServiceKw);
+    if (na.x === nb.x) {
+      return `<path d="M${na.x+W/2},${na.y+H} L${nb.x+W/2},${nb.y}" fill="none" stroke="${active?'var(--accent)':'var(--border-strong)'}" stroke-width="${active?2.5:1.4}" marker-end="url(#topo-arrow)"/>`;
+    }
+    const mx = (x1 + x2) / 2;
+    return `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="${active?'var(--accent)':'var(--border-strong)'}" stroke-width="${active?2.5:1.4}" marker-end="url(#topo-arrow)"/>`;
+  }).join('');
+
+  const nodesSvg = TOPO_NODES.map(n => {
+    const c = nodeColors(n.kind);
+    const isSel = activeServiceKw === n.kw;
+    return `
+      <g class="svg-node ${isSel ? 'is-active' : ''}" data-svckw="${n.kw}" role="button" tabindex="0" aria-label="Lọc theo ${n.label}">
+        <rect x="${n.x}" y="${n.y}" width="${W}" height="${H}" rx="8" fill="${c.fill}" stroke="${c.stroke}" stroke-width="${isSel?3:1.5}" />
+        <text x="${n.x+10}" y="${n.y+21}" font-size="12" font-weight="700" fill="var(--ink)">${esc(n.label)}</text>
+        <text x="${n.x+10}" y="${n.y+38}" font-size="10.5" fill="var(--muted)">${esc(n.sub)}</text>
+      </g>
+    `;
+  }).join('');
+
+  wrap.innerHTML = `
+    <svg width="1085" height="350" viewBox="0 0 1085 350" style="display:block;">
+      <defs>
+        <marker id="topo-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+          <path d="M0,0 L7,3.5 L0,7 z" fill="var(--muted)" />
+        </marker>
+      </defs>
+      ${edgesSvg}
+      ${nodesSvg}
+    </svg>
+  `;
+  wrap.querySelectorAll('[data-svckw]').forEach(el => {
+    const pick = () => {
+      activeServiceKw = activeServiceKw === el.dataset.svckw ? '' : el.dataset.svckw;
+      document.getElementById('svcFilterStatus').textContent = activeServiceKw
+        ? `Đang lọc các luồng chứa: ${activeServiceKw}`
+        : 'Đang hiện: Tất cả services';
+      document.getElementById('clearSvcFilter').classList.toggle('hidden', !activeServiceKw);
+      renderTopology();
+      renderFlows();
+    };
+    el.addEventListener('click', pick);
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+  });
+}
+
+function renderFlowDiagramSVG(flow) {
+  const st = getFlowState(flow.id);
+  const showErr = st.showErrors;
+  const rawNodes = flow.diagram.nodes.filter(n => showErr || n[3] !== 'err');
+  const visibleIds = new Set(rawNodes.map(n => n[0]));
+  const rawEdges = flow.diagram.edges.filter(e => visibleIds.has(e[0]) && visibleIds.has(e[1]));
+
+  const W = 166, H = 56, GX = 62, GY = 50, PX = 20, PY = 38;
+  const maxCol = Math.max(...rawNodes.map(n => n[4]), 1);
+  const maxRow = Math.max(...rawNodes.map(n => n[5]), 0);
+  const width = PX * 2 + (maxCol + 1) * W + maxCol * GX;
+  const height = PY + 20 + (maxRow + 1) * H + maxRow * GY;
+
+  const pos = {};
+  rawNodes.forEach(([id, label, sub, kind, col, row, stepRef]) => {
+    pos[id] = { id, label, sub, kind, col, row, stepRef, x: PX + col * (W + GX), y: PY + row * (H + GY) };
+  });
+
+  const markerId = `arr-${flow.id}`;
+  const errMarkerId = `arr-err-${flow.id}`;
+
+  const edgesSvg = rawEdges.map(([fromId, toId, lbl, type]) => {
+    const a = pos[fromId], b = pos[toId];
+    let d, lx, ly;
+    if (type === 'loop') {
+      const x1 = a.x + W / 2, y1 = a.y;
+      const x2 = b.x + W / 2, y2 = b.y;
+      const arcY = Math.min(y1, y2) - 28;
+      d = `M${x1},${y1} C${x1},${arcY} ${x2},${arcY} ${x2},${y2}`;
+      lx = (x1 + x2) / 2;
+      ly = arcY + 10;
+    } else if (a.col === b.col && b.row > a.row) {
+      const x1 = a.x + W / 2, y1 = a.y + H;
+      const x2 = b.x + W / 2, y2 = b.y;
+      d = `M${x1},${y1} L${x2},${y2}`;
+      lx = x1 + 4;
+      ly = (y1 + y2) / 2 + 4;
+    } else if (a.row === b.row && b.col > a.col) {
+      const x1 = a.x + W, y1 = a.y + H / 2;
+      const x2 = b.x, y2 = b.y + H / 2;
+      d = `M${x1},${y1} L${x2},${y2}`;
+      lx = (x1 + x2) / 2;
+      ly = y1 - 8;
+    } else {
+      const x1 = a.x + W, y1 = a.y + H / 2;
+      const x2 = b.x, y2 = b.y + H / 2;
+      const mx = (x1 + x2) / 2;
+      d = `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
+      lx = mx;
+      ly = (y1 + y2) / 2 - 5;
+    }
+    const isErr = type === 'err';
+    const isActive = st.activeStep && (a.stepRef === st.activeStep || b.stepRef === st.activeStep) && !isErr;
+    const stroke = isErr ? 'var(--danger)' : isActive ? 'var(--accent)' : 'var(--border-strong)';
+    const dash = isErr || type === 'branch' ? 'stroke-dasharray="4 3"' : '';
+    const mUrl = isErr ? `url(#${errMarkerId})` : `url(#${markerId})`;
+    return `
+      <g class="svg-edge ${isActive ? 'is-active' : ''}">
+        <path d="${d}" fill="none" stroke="${stroke}" stroke-width="${isActive ? 2.4 : 1.6}" ${dash} marker-end="${mUrl}" />
+        ${lbl ? `<rect x="${lx - lbl.length * 3.1 - 4}" y="${ly - 9}" width="${lbl.length * 6.2 + 8}" height="14" rx="4" fill="var(--canvas-bg)" opacity="0.92" />
+        <text x="${lx}" y="${ly + 1}" text-anchor="middle" font-size="10" font-weight="600" fill="${isErr ? 'var(--danger)' : 'var(--muted)'}">${esc(lbl)}</text>` : ''}
+      </g>
+    `;
+  }).join('');
+
+  const nodesSvg = rawNodes.map(([id, label, sub, kind, col, row, stepRef]) => {
+    const p = pos[id];
+    const c = nodeColors(kind);
+    const isActive = st.activeStep && st.activeStep === stepRef && kind !== 'err';
+    const shape = kind === 'decision'
+      ? `<polygon points="${p.x+W/2},${p.y-2} ${p.x+W+2},${p.y+H/2} ${p.x+W/2},${p.y+H+2} ${p.x-2},${p.y+H/2}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="${isActive?3:1.6}" />`
+      : `<rect x="${p.x}" y="${p.y}" width="${W}" height="${H}" rx="8" fill="${c.fill}" stroke="${c.stroke}" stroke-width="${isActive?3:1.6}" ${kind==='err'?'stroke-dasharray="4 2"':''} />`;
+    const badge = stepRef ? `<circle cx="${p.x + 12}" cy="${p.y + 12}" r="8" fill="${c.stroke}" /><text x="${p.x + 12}" y="${p.y + 15.5}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#fff">${stepRef}</text>` : '';
+    const textX = kind === 'decision' ? p.x + W / 2 : p.x + 25;
+    const anchor = kind === 'decision' ? 'middle' : 'start';
+    return `
+      <g class="svg-node ${isActive ? 'is-active' : ''}" data-flow="${flow.id}" data-step="${stepRef || ''}" role="button" tabindex="0" aria-label="${esc(label)}">
+        ${shape}
+        ${kind === 'decision' ? '' : badge}
+        <text x="${textX}" y="${p.y + 22}" text-anchor="${anchor}" font-size="11.5" font-weight="700" fill="var(--ink)">${esc(label)}</text>
+        <text x="${textX}" y="${p.y + 40}" text-anchor="${anchor}" font-size="10" fill="var(--muted)">${esc(sub)}</text>
+      </g>
+    `;
+  }).join('');
+
+  return `
+    <svg class="diagram-svg" width="${Math.round(width * st.zoom)}" height="${Math.round(height * st.zoom)}" viewBox="0 0 ${width} ${height}">
+      <defs>
+        <marker id="${markerId}" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="var(--muted)" /></marker>
+        <marker id="${errMarkerId}" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="var(--danger)" /></marker>
+      </defs>
+      ${edgesSvg}
+      ${nodesSvg}
+    </svg>
+  `;
+}
+
+function renderInspector(flow) {
+  const st = getFlowState(flow.id);
+  if (!st.activeStep) return '';
+  const row = flow.steps.find(s => s[0] === st.activeStep);
+  if (!row) return '';
+  return `
+    <div class="inspector-strip">
+      <div><div class="insp-label">Bước ${row[0]} · ${esc(row[2])}</div><code>${esc(row[3])}</code></div>
+      <div><div class="insp-label">Input / Auth / Guard</div><div>${esc(row[4])}</div></div>
+      <div><div class="insp-label">Persistence / I/O</div><div>${esc(row[5])}</div></div>
+      <div><div class="insp-label">Output &amp; Fallback</div><div class="ok-text">${esc(row[6])}</div><div class="err-text">${esc(row[7])}</div></div>
+    </div>
+  `;
+}
+
+function renderFilters() {
+  const el = document.getElementById('domainFilters');
+  el.innerHTML = DOMAINS.map(d =>
+    `<button type="button" class="pill-btn" aria-pressed="${activeDomain===d.id}" data-domain="${d.id}">${d.label}</button>`
+  ).join('');
+  el.querySelectorAll('.pill-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeDomain = btn.dataset.domain;
+      renderFilters();
+      renderFlows();
+    });
+  });
+}
+
+function matchesFilters(flow, q) {
+  if (activeDomain !== 'all' && flow.domain !== activeDomain) return false;
+  const hay = [flow.id, flow.title, flow.summary, flow.domainLabel, ...flow.flags, ...flow.steps.flat()].join(' ').toLowerCase();
+  if (activeServiceKw && !hay.includes(activeServiceKw.toLowerCase())) return false;
+  if (q && !hay.includes(q)) return false;
+  return true;
+}
+
+function renderSidebar(visible) {
+  const nav = document.getElementById('sidebarNav');
+  const groups = {};
+  visible.forEach(f => { (groups[f.domainLabel] ||= []).push(f); });
+  nav.innerHTML = Object.entries(groups).map(([label, items]) => `
+    <div class="sidebar-group">
+      <div class="sidebar-title">${label}</div>
+      ${items.map(f => `<a class="nav-link" href="#flow-${f.id}"><span class="nav-num">${f.id}</span><span>${esc(f.title.replace(/^Flow \d+\s+—\s+/, ''))}</span></a>`).join('')}
+    </div>
+  `).join('') || '<p style="color:var(--muted);font-size:12px;margin:6px;">Không có luồng nào khớp bộ lọc.</p>';
+}
+
+function stepPlay(flow, delta) {
+  const st = getFlowState(flow.id);
+  const nums = flow.steps.map(s => s[0]);
+  if (!st.activeStep) {
+    st.activeStep = delta > 0 ? nums[0] : nums[nums.length - 1];
+  } else {
+    const idx = nums.indexOf(st.activeStep);
+    const next = idx + delta;
+    if (next < 0 || next >= nums.length) st.activeStep = nums[0];
+    else st.activeStep = nums[next];
+  }
+  updateSingleFlowCard(flow.id);
+}
+
+function toggleAutoPlay(flow) {
+  const st = getFlowState(flow.id);
+  if (st.timer) {
+    clearInterval(st.timer);
+    st.timer = null;
+    updateSingleFlowCard(flow.id);
+    return;
+  }
+  if (!st.activeStep) st.activeStep = flow.steps[0][0];
+  updateSingleFlowCard(flow.id);
+  st.timer = setInterval(() => {
+    const nums = flow.steps.map(s => s[0]);
+    const idx = nums.indexOf(st.activeStep);
+    if (idx === nums.length - 1) {
+      clearInterval(st.timer);
+      st.timer = null;
+      updateSingleFlowCard(flow.id);
+    } else {
+      stepPlay(flow, 1);
+    }
+  }, 1300);
+}
+
+function buildFlowCardInner(flow) {
+  const st = getFlowState(flow.id);
+  const isClosed = collapsed.has(flow.id);
+  const showDiagram = st.mode !== 'grid';
+  const showGrid = st.mode !== 'diagram';
+  return `
+    <div class="flow-header" data-toggle="${flow.id}" role="button" tabindex="0" aria-expanded="${!isClosed}">
+      <div>
+        <div class="flow-meta-row">
+          <span class="flow-id">FLOW ${flow.id}</span>
+          <span class="domain-tag">${esc(flow.domainLabel)}</span>
+          ${flow.flags.map(fl => `<span class="flag-badge">${esc(fl)}</span>`).join('')}
+        </div>
+        <h2 class="flow-title">${esc(flow.title)}</h2>
+        <p class="flow-summary">${esc(flow.summary)}</p>
+      </div>
+      <span class="flow-toggle">${isClosed ? '[+ Mở]' : '[- Thu gọn]'}</span>
+    </div>
+    <div class="${isClosed ? 'hidden' : ''}">
+      <div class="flow-toolbar">
+        <div class="toolbar-left">
+          <button type="button" class="btn btn-accent" data-play="${flow.id}">${st.timer ? '⏸ Dừng' : '▶ Mô phỏng'}</button>
+          <button type="button" class="btn" data-prev="${flow.id}">◀ Lùi</button>
+          <button type="button" class="btn" data-next="${flow.id}">Tiếp ▶</button>
+          <button type="button" class="btn" data-reset="${flow.id}">↺ Reset</button>
+          <span class="sim-status">${st.activeStep ? `Đang chọn: Bước ${st.activeStep}/${flow.steps.length}` : 'Click node hoặc bấm ▶ Mô phỏng'}</span>
+        </div>
+        <div class="toolbar-right">
+          <button type="button" class="btn" aria-pressed="${st.showErrors}" data-errtoggle="${flow.id}">Nhánh lỗi</button>
+          <button type="button" class="btn" data-zoom="-0.15" data-fid="${flow.id}">−</button>
+          <button type="button" class="btn" data-zoom="0" data-fid="${flow.id}">${Math.round(st.zoom * 100)}%</button>
+          <button type="button" class="btn" data-zoom="0.15" data-fid="${flow.id}">+</button>
+          <button type="button" class="btn" aria-pressed="${st.mode==='both'}" data-vmode="both" data-fid="${flow.id}">Cả hai</button>
+          <button type="button" class="btn" aria-pressed="${st.mode==='diagram'}" data-vmode="diagram" data-fid="${flow.id}">Lưu đồ</button>
+          <button type="button" class="btn" aria-pressed="${st.mode==='grid'}" data-vmode="grid" data-fid="${flow.id}">Bảng Grid</button>
+        </div>
+      </div>
+      ${showDiagram ? `<div class="diagram-wrap">${renderFlowDiagramSVG(flow)}</div>` : ''}
+      ${renderInspector(flow)}
+      ${showGrid ? `
+      <div class="grid-scroll">
+        <table class="exec-grid">
+          <thead>
+            <tr>
+              <th>Bước</th><th>Layer / Service</th><th>File &amp; Symbol</th><th>Input / Auth / Guard</th>
+              <th>Persistence / External I/O</th><th>Output / Next State</th><th>Fallback / Error Guard</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${flow.steps.map(s => `
+              <tr class="${st.activeStep === s[0] ? 'row-active' : ''}" data-rowflow="${flow.id}" data-rowstep="${s[0]}">
+                <td class="step-cell">${s[0]}</td>
+                <td><span class="layer-badge ${layerClass(s[1])}">${s[1]}</span> <strong>${esc(s[2])}</strong></td>
+                <td><code>${esc(s[3])}</code></td>
+                <td>${esc(s[4])}</td>
+                <td>${esc(s[5])}</td>
+                <td class="ok-text">${esc(s[6])}</td>
+                <td class="err-text">${esc(s[7])}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>` : ''}
+    </div>
+  `;
+}
+
+function bindCardEvents(card, flow) {
+  const header = card.querySelector('.flow-header');
+  const toggle = () => {
+    if (collapsed.has(flow.id)) collapsed.delete(flow.id); else collapsed.add(flow.id);
+    updateSingleFlowCard(flow.id);
+  };
+  header.addEventListener('click', toggle);
+  header.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+
+  const st = getFlowState(flow.id);
+  const stopTimer = () => { if (st.timer) { clearInterval(st.timer); st.timer = null; } };
+
+  card.querySelector('[data-play]')?.addEventListener('click', () => toggleAutoPlay(flow));
+  card.querySelector('[data-prev]')?.addEventListener('click', () => { stopTimer(); stepPlay(flow, -1); });
+  card.querySelector('[data-next]')?.addEventListener('click', () => { stopTimer(); stepPlay(flow, 1); });
+  card.querySelector('[data-reset]')?.addEventListener('click', () => { stopTimer(); st.activeStep = null; updateSingleFlowCard(flow.id); });
+  card.querySelector('[data-errtoggle]')?.addEventListener('click', () => { st.showErrors = !st.showErrors; updateSingleFlowCard(flow.id); });
+
+  card.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click', () => {
+    const d = Number(b.dataset.zoom);
+    st.zoom = d === 0 ? 1 : Math.min(1.6, Math.max(0.65, +(st.zoom + d).toFixed(2)));
+    updateSingleFlowCard(flow.id);
+  }));
+  card.querySelectorAll('[data-vmode]').forEach(b => b.addEventListener('click', () => {
+    st.mode = b.dataset.vmode;
+    updateSingleFlowCard(flow.id);
+  }));
+
+  card.querySelectorAll('[data-step]').forEach(n => {
+    const pick = () => {
+      if (!n.dataset.step) return;
+      stopTimer();
+      st.activeStep = st.activeStep === n.dataset.step ? null : n.dataset.step;
+      updateSingleFlowCard(flow.id);
+    };
+    n.addEventListener('click', pick);
+    n.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+  });
+
+  card.querySelectorAll('[data-rowstep]').forEach(tr => tr.addEventListener('click', () => {
+    stopTimer();
+    st.activeStep = st.activeStep === tr.dataset.rowstep ? null : tr.dataset.rowstep;
+    updateSingleFlowCard(flow.id);
+  }));
+}
+
+function updateSingleFlowCard(flowId) {
+  const flow = FLOWS.find(f => f.id === flowId);
+  const card = document.getElementById('flow-' + flowId);
+  if (!flow || !card) return;
+  card.innerHTML = buildFlowCardInner(flow);
+  bindCardEvents(card, flow);
+}
+
+function renderFlows() {
+  const q = searchTerm.trim().toLowerCase();
+  const visible = FLOWS.filter(f => matchesFilters(f, q));
+  renderSidebar(visible);
+  const container = document.getElementById('flowsContainer');
+  if (!visible.length) {
+    container.innerHTML = '<div class="panel-card"><p style="margin:0;color:var(--muted);">Không tìm thấy luồng chạy nào khớp với bộ lọc hiện tại.</p></div>';
+    return;
+  }
+  container.innerHTML = visible.map(flow => `<article class="flow-card" id="flow-${flow.id}">${buildFlowCardInner(flow)}</article>`).join('');
+  visible.forEach(flow => bindCardEvents(document.getElementById('flow-' + flow.id), flow));
+}
+
+function renderStaticTables() {
+  document.querySelector('#matrixTable tbody').innerHTML = MATRIX.map(r => `
+    <tr><td><strong>${r[0]}</strong></td><td><code>${r[1]}</code></td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td><td>${esc(r[5])}</td></tr>
+  `).join('');
+  document.querySelector('#flagsTable tbody').innerHTML = FLAGS.map(r => `
+    <tr><td><code>${r[0]}</code></td><td><code>${r[1]}</code></td><td><strong>${r[2]}</strong></td><td>${esc(r[3])}</td></tr>
+  `).join('');
+  document.querySelector('#locksTable tbody').innerHTML = LOCKS.map(r => `
+    <tr><td><strong>${r[0]}</strong></td><td><code>${r[1]}</code></td><td><strong>${r[2]}</strong></td><td>${esc(r[3])}</td></tr>
+  `).join('');
+}
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.setAttribute('aria-selected', String(b === btn)));
+    const target = btn.dataset.tab;
+    ['grids', 'matrix', 'specs'].forEach(t => document.getElementById('tab-' + t).classList.toggle('hidden', t !== target));
+  });
+});
+
+document.getElementById('searchBox').addEventListener('input', e => { searchTerm = e.target.value; renderFlows(); });
+document.getElementById('expandAllBtn').addEventListener('click', () => { collapsed.clear(); renderFlows(); });
+document.getElementById('collapseAllBtn').addEventListener('click', () => { FLOWS.forEach(f => collapsed.add(f.id)); renderFlows(); });
+document.getElementById('clearSvcFilter').addEventListener('click', () => {
+  activeServiceKw = '';
+  document.getElementById('svcFilterStatus').textContent = 'Đang hiện: Tất cả services';
+  document.getElementById('clearSvcFilter').classList.add('hidden');
+  renderTopology();
+  renderFlows();
+});
+document.getElementById('toggleTopoBtn').addEventListener('click', () => {
+  document.getElementById('topoCanvas').classList.toggle('hidden');
+});
+
+const themeOrder = ['auto', 'light', 'dark'];
+let themeIdx = 0;
+document.getElementById('themeToggle').addEventListener('click', () => {
+  themeIdx = (themeIdx + 1) % themeOrder.length;
+  const mode = themeOrder[themeIdx];
+  if (mode === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', mode);
+  document.getElementById('themeToggle').textContent = 'Theme: ' + mode.charAt(0).toUpperCase() + mode.slice(1);
+});
+
+renderTopology();
+renderFilters();
+renderFlows();
+renderStaticTables();
+</script>
+</body>
+</html>

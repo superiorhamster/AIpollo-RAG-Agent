@@ -32,7 +32,7 @@ Snapshot bàn giao, xác nhận lại vì có thể thay đổi:
 - Branch `dev-DuyAnh`, HEAD `563261a` khi tài liệu này được tạo ngày 2026-11-23.
 - Có local changes ở research graph, research regression và execution plans; giữ nguyên, không reset/stash/checkout đè chúng.
 - Stack chính thường dùng web `http://127.0.0.1:23000`, API cổng `23001`. Xác minh runtime Origin, Compose project và overlays, không chỉ đọc giá trị mặc định.
-- Main chat setting `claude-free`; người dùng đã thêm `cx/gpt-5.6-luna` vào combo. Người dùng đã yêu cầu kiểm tra Luna. Embedding `embeddinggemma-2:270m-q8_0-text`. Không tự đổi provider, route hoặc shared 9router.
+- Main chat setting `claude-free`; người dùng đã thêm `cx/gpt-5.6-luna` vào combo. Người dùng đã yêu cầu kiểm tra Luna. Embedding `gemini-embedding-2` (qua cấu hình `.env` hoặc `compose.gemini.yaml`). Không tự đổi provider, route hoặc shared 9router.
 - Lịch sử: running-stack smoke 13/13, UI 16/16 và Phase 03 đã PASS ở lượt trước. Đây là tham chiếu, không phải kết quả kiểm thử mới.
 - Focused gap grading chưa commit đã qua 18 DB/fixture research regressions. Real-model acceptance vẫn chưa được chứng minh.
 - Lượt live `rag-local-test-336780-24580` đã kết thúc với exit 1: polling document jobs nhận HTTP 503 vượt số retry cho phép, ở `tests/phase05/research_live.spec.ts:74`, trước khi có model run hoàn tất. Log `test-results/smoke-20261122/agentic-focused-live.log`, exit metadata `test-results/smoke-20261122/agentic-focused-status.txt`. Không gọi lượt này là coverage PASS hoặc model FAIL. Handoff cũ mô tả nó đang chạy là thông tin lịch sử.
@@ -128,10 +128,10 @@ Main stack, sau khi xác nhận đúng config/project và không cần khởi t�
 
 ```bash
 make check
-make COMPOSE_FILES='compose.dev.yaml compose.ollama.yaml' compose-check
-make COMPOSE_FILES='compose.dev.yaml compose.ollama.yaml' verify
-make COMPOSE_FILES='compose.dev.yaml compose.ollama.yaml' verify-provider
-make COMPOSE_FILES='compose.dev.yaml compose.ollama.yaml' verify-smoke
+make compose-check
+make verify
+make verify-provider
+make verify-smoke
 ```
 
 Nếu Docker/main stack chưa chạy, bootstrap đúng existing project/config theo README; không tạo `.env` mới đè credential. Không rebuild/restart main chỉ để inject lỗi. Ghi rõ main image hiện tại so với source đang kiểm thử.

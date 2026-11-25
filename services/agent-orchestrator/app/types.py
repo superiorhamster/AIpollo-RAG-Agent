@@ -165,13 +165,13 @@ FieldText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1
 
 
 class Claim(BaseModel):
-    text: str = Field(min_length=1, max_length=1800)
+    text: str = Field(min_length=1, max_length=2400)
     evidence: list[UUID] = Field(min_length=1, max_length=6)
     fields: dict[FieldText, FieldText] = Field(default_factory=dict, max_length=12)
 
 
 class GeneratedAnswer(BaseModel):
-    claims: list[Claim] = Field(max_length=12)
+    claims: list[Claim] = Field(max_length=20)
 
 
 class CandidateClaim(Claim):
@@ -180,7 +180,7 @@ class CandidateClaim(Claim):
 
 
 class CandidateAnswer(BaseModel):
-    claims: list[CandidateClaim] = Field(max_length=12)
+    claims: list[CandidateClaim] = Field(max_length=20)
 
 
 class AskClaim(Claim):
@@ -195,7 +195,7 @@ class AskClaim(Claim):
 
 
 class GeneratedAskAnswer(BaseModel):
-    claims: list[AskClaim] = Field(max_length=12)
+    claims: list[AskClaim] = Field(max_length=20)
 
 
 class GeneratedTutorAnswer(GeneratedAskAnswer):

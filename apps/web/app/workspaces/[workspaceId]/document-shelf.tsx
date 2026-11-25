@@ -4,16 +4,20 @@ import Link from 'next/link'
 import { mapConcurrent } from '../../lib/polling'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
+import { RefreshCw, Trash2 } from 'lucide-react'
 import { AccountMenu } from '../../components/account-menu'
-import { DesignIcon, type IconName } from '../../components/aipollo'
+import { DesignIcon } from '../../components/aipollo'
 import { useWorkspaceLanguage } from '../../components/workspace-language'
 import { api, ApiError, authenticatedFetch, errorMessage, readResponse, type Workspace } from '../../lib/api'
-import { workspaceLocation } from '../../lib/workspace-location'
 import { AnnotatedPreview } from './annotated-preview'
 import { SourceSearch } from './source-search'
 import { AcademicLibrary } from './academic-library'
-import { InteractionPanel } from './interaction-panel'
+import { InteractionPanel, type Mode } from './interaction-panel'
 import type { CitationTarget } from './pdf-preview'
+import { PANEL_BOUNDS, usePanelResize } from './use-panel-resize'
+import { ReaderDocumentBar, type RenameOutcome } from './reader-document-bar'
+import { WORKSPACE_VIEWS, WorkspaceSidebar } from './workspace-sidebar'
+import { type WorkspaceView, workspaceLocation } from '../../lib/workspace-location'
 
 export type DocumentItem = {
   document_id: string
@@ -28,16 +32,7 @@ export type DocumentItem = {
 
 type Job = { kind: 'preview' | 'index'; status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'; error_code?: string | null }
 type DocumentJobs = { preview?: Job['status']; index?: Job['status']; error?: string }
-type View = 'chats' | 'library' | 'notes' | 'artifacts' | 'references' | 'history'
 
-const views: { id: View; label: string; vietnamese: string; icon: IconName; activeIcon?: IconName }[] = [
-  { id: 'chats', label: 'Chats', vietnamese: 'Trò chuyện', icon: 'chats', activeIcon: 'chats-active' },
-  { id: 'library', label: 'Library', vietnamese: 'Thư viện', icon: 'library', activeIcon: 'library-active' },
-  { id: 'notes', label: 'Notes', vietnamese: 'Ghi chú', icon: 'notes' },
-  { id: 'artifacts', label: 'Artifacts', vietnamese: 'Sản phẩm', icon: 'artifacts', activeIcon: 'artifacts-active' },
-  { id: 'references', label: 'References', vietnamese: 'Tài liệu tham khảo', icon: 'references' },
-  { id: 'history', label: 'History', vietnamese: 'Lịch sử', icon: 'history' },
-]
 const filters = {
   all: 'All', succeeded: 'Ready', running: 'Processing', queued: 'Queued', failed: 'Failed', cancelled: 'Cancelled',
 } as const
@@ -48,30 +43,77 @@ const jobColors: Record<Job['status'], string> = {
   succeeded: 'success', running: 'warning', queued: 'info', failed: 'danger', cancelled: 'neutral',
 }
 
-export function DocumentShelf({ workspace, workspaces, email, items, selected, initialPage }: {
+function summarizeDocumentJobs(doc: DocumentItem, jobs: Job[]): DocumentJobs {
+  const previewStatus = jobs.find(j => j.kind === 'preview')?.status ?? (doc.preview_ready ? 'succeeded' : 'queued')
+  const indexJob = jobs.find(j => j.kind === 'index')
+  const failure = jobs.find(job => job.status === 'failed')
+  return {
+    preview: previewStatus,
+    index: indexJob?.status ?? 'queued',
+    error: failure?.error_code ?? undefined,
+  }
+}
+
+export function DocumentShelf({ workspace, workspaces, email, items, selected, initialPage, initialView }: {
   workspace: Workspace
   workspaces: Workspace[]
   email: string
   items: DocumentItem[]
   selected?: string
   initialPage: number
+  initialView?: WorkspaceView
 }) {
   const router = useRouter()
   const { language, text } = useWorkspaceLanguage()
+  const defaultView: WorkspaceView = initialView ?? (items.length ? 'chats' : 'library')
   const [documents, setDocuments] = useState(items)
   const [selectedId, setSelectedId] = useState<string | undefined>(selected ?? items[0]?.document_id)
   const [page, setPage] = useState(selected ? initialPage : 1)
-  const [view, setView] = useState<View>(items.length ? 'chats' : 'library')
+  const [view, setView] = useState<WorkspaceView>(defaultView)
+  const [requestedMode, setRequestedMode] = useState<{ mode: 'ASK' | 'PLAN'; nonce: number }>(() => ({
+    mode: defaultView === 'plans' ? 'PLAN' : 'ASK',
+    nonce: defaultView === 'plans' ? 1 : 0,
+  }))
   const [activeTab, setActiveTab] = useState<'assistant' | 'sources' | 'reader'>(
-    selected ? 'reader' : items.length ? 'assistant' : 'sources'
+    selected ? 'reader' : defaultView === 'chats' || defaultView === 'plans' || defaultView === 'history' ? 'assistant' : 'sources'
   )
   const [selectedSources, setSelectedSources] = useState<string[]>([])
+  const sourcesStorageKey = 'aipollo.selected-sources.' + workspace.workspace_id
+  const hydratedWorkspaceRef = useRef<string | null>(null)
+  useEffect(() => {
+    const validIds = new Set(items.map(item => item.document_id))
+    let restored: string[] = []
+    try {
+      const raw = window.sessionStorage.getItem(sourcesStorageKey)
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) {
+          restored = parsed.filter((id): id is string => typeof id === 'string' && validIds.has(id))
+        }
+      }
+    } catch {
+      // Session storage may be blocked; keep empty initial sources.
+    }
+    hydratedWorkspaceRef.current = workspace.workspace_id
+    setSelectedSources(restored)
+  }, [workspace.workspace_id, sourcesStorageKey, items])
+  useEffect(() => {
+    if (hydratedWorkspaceRef.current !== workspace.workspace_id) return
+    try {
+      window.sessionStorage.setItem(sourcesStorageKey, JSON.stringify(selectedSources))
+    } catch {
+      // Session storage may be blocked.
+    }
+  }, [workspace.workspace_id, sourcesStorageKey, selectedSources])
   const [sourcesLocked, setSourcesLocked] = useState(false)
   const [readerVisible, setReaderVisible] = useState(true)
+  const [annotationPending, setAnnotationPending] = useState(false)
+  const [annotationDirty, setAnnotationDirty] = useState(false)
   const [citation, setCitation] = useState<CitationTarget>()
   const [filter, setFilter] = useState<keyof typeof filters>('all')
   const [documentJobs, setDocumentJobs] = useState<Record<string, DocumentJobs>>({})
   const latestJobs = useRef(documentJobs)
+  const [pollVersion, setPollVersion] = useState(0)
   const [busy, setBusy] = useState(false)
   const [fileName, setFileName] = useState('')
   const [error, setError] = useState('')
@@ -79,7 +121,16 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
   const [openedArtifact, setOpenedArtifact] = useState<string>()
   const uploadKey = useRef<string | null>(null)
   const uploadForm = useRef<HTMLFormElement>(null)
+  const workspaceBody = useRef<HTMLDivElement>(null)
+  const sidebar = useRef<HTMLElement>(null)
   const reader = useRef<HTMLElement>(null)
+  const deletedIdsRef = useRef<Set<string>>(new Set())
+  const { activeSide, bodyStyle, effectiveWidths, handleKeyDown, resetWidth, startResize } = usePanelResize({
+    bodyRef: workspaceBody,
+    sidebarRef: sidebar,
+    readerRef: reader,
+    readerVisible,
+  })
   const mayWrite = workspace.role !== 'VIEWER'
   const selectedDoc = documents.find(item => item.document_id === selectedId)
   const base = `/v1/workspaces/${workspace.workspace_id}/documents`
@@ -95,6 +146,7 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
 
     async function pollJobs() {
       const pendingDocs = documents.filter(doc => {
+        if (deletedIdsRef.current.has(doc.document_id)) return false
         if (!doc.preview_ready) return true
         const jobs = latestJobs.current[doc.document_id]
         if (!jobs) return true
@@ -109,30 +161,38 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
             try {
               const updatedDoc = doc.preview_ready ? doc : await poll<DocumentItem>(`${base}/${doc.document_id}`)
               const jobs = await poll<Job[]>(`${base}/${doc.document_id}/jobs`)
-              const previewStatus = jobs.find(j => j.kind === 'preview')?.status ?? (updatedDoc.preview_ready ? 'succeeded' : 'queued')
-              const indexJob = jobs.find(j => j.kind === 'index')
-              const failure = jobs.find(job => job.status === 'failed')
-              return { id: doc.document_id, doc: updatedDoc, preview: previewStatus,
-                index: indexJob?.status ?? 'queued', error: failure?.error_code ?? undefined }
+              return { id: doc.document_id, doc: updatedDoc, ...summarizeDocumentJobs(updatedDoc, jobs) }
             } catch (err) {
               if (err instanceof ApiError && err.status === 401) {
                 router.replace('/sign-in')
+              }
+              if (err instanceof ApiError && err.status === 404) {
+                return { id: doc.document_id, deleted: true as const }
               }
               return null
             }
           })
 
         if (!active) return
+        const deletedIds = new Set(
+          updates
+            .filter((item): item is { id: string; deleted: true } => item !== null && 'deleted' in item)
+            .map(item => item.id)
+        )
         const incomplete = updates.some(item => item === null)
         setPollError(incomplete)
         delay = incomplete ? Math.min(15000, delay * 2) : 1500
 
-        let docsChanged = false
-        const nextDocs = [...documents]
+        let docsChanged = deletedIds.size > 0
+        const nextDocs = documents.filter(doc => !deletedIds.has(doc.document_id))
         const nextJobs = { ...latestJobs.current }
+        for (const id of deletedIds) {
+          deletedIdsRef.current.add(id)
+          delete nextJobs[id]
+        }
 
         for (const item of updates) {
-          if (!item) continue
+          if (!item || 'deleted' in item) continue
           nextJobs[item.id] = { preview: item.preview, index: item.index, error: item.error }
           if (item.doc.preview_ready) {
             const idx = nextDocs.findIndex(d => d.document_id === item.id)
@@ -144,12 +204,19 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
         }
 
         if (docsChanged) {
-          setDocuments(nextDocs)
+          const updatedById = new Map(nextDocs.map(doc => [doc.document_id, doc]))
+          setDocuments(current => current
+            .filter(doc => !deletedIds.has(doc.document_id))
+            .map(doc => updatedById.get(doc.document_id) ?? doc))
+          if (deletedIds.size > 0) {
+            setSelectedSources(current => current.filter(id => !deletedIds.has(id)))
+          }
         }
         latestJobs.current = nextJobs
         setDocumentJobs(nextJobs)
 
         const stillPending = nextDocs.some(doc => {
+          if (deletedIdsRef.current.has(doc.document_id)) return false
           if (!doc.preview_ready) return true
           const j = nextJobs[doc.document_id]
           return !j || j.index === 'queued' || j.index === 'running'
@@ -173,9 +240,23 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
       controller.abort()
       clearTimeout(timer)
     }
-  }, [base, documents, router])
+  }, [base, documents, pollVersion, router])
 
-  function select(id: string | undefined, nextPage = 1, switchMobileToReader = true) {
+  function select(id: string | undefined, nextPage = 1, switchMobileToReader = true): boolean {
+    if (annotationPending && id !== selectedId) {
+      setError(text(
+        'Save or discard the pending annotation before changing documents.',
+        'Hãy lưu hoặc hủy ghi chú đang chờ trước khi chuyển tài liệu.',
+      ))
+      return false
+    }
+    if (annotationDirty && id !== selectedId && !window.confirm(text(
+      'You have an unsaved note draft. Discard draft and switch document?',
+      'Bạn có ghi chú chưa lưu. Bỏ bản nháp và chuyển tài liệu?',
+    ))) {
+      return false
+    }
+    setError('')
     setSelectedId(id)
     setPage(nextPage)
     setCitation(undefined)
@@ -184,6 +265,7 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
       setReaderVisible(true)
       setActiveTab('reader')
     }
+    return true
   }
 
   async function run(operation: () => Promise<void>) {
@@ -235,23 +317,88 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
     })
   }
 
-  function rename(event: FormEvent<HTMLFormElement>, id: string) {
-    event.preventDefault()
-    const name = String(new FormData(event.currentTarget).get('name')).trim()
-    void run(async () => {
+  async function renameDocument(id: string, name: string): Promise<RenameOutcome> {
+    if (annotationPending && id === selectedId) {
+      return {
+        ok: false,
+        error: text(
+          'Save or discard the pending annotation before renaming.',
+          'Hãy lưu hoặc hủy ghi chú đang chờ trước khi đổi tên.',
+        ),
+      }
+    }
+    setBusy(true)
+    setError('')
+    try {
       const document = await api<DocumentItem>(base + '/' + id, 'PATCH', { name })
       setDocuments(current => current.map(item => item.document_id === id ? document : item))
-    })
+      return { ok: true }
+    } catch (failure) {
+      const message = errorMessage(failure)
+      if (failure instanceof ApiError && failure.status === 401) router.replace('/sign-in')
+      return { ok: false, error: message }
+    } finally {
+      setBusy(false)
+    }
   }
 
   function remove(document: DocumentItem) {
-    if (!window.confirm(`Delete “${document.name}”?`)) return
+    const id = document.document_id
+    if (annotationPending && id === selectedId) {
+      setError(text(
+        'Save or discard the pending annotation before deleting.',
+        'Hãy lưu hoặc hủy ghi chú đang chờ trước khi xóa tài liệu.',
+      ))
+      return
+    }
+    if (!window.confirm(text(`Delete “${document.name}”?`, `Xóa tài liệu “${document.name}”?`))) return
+    deletedIdsRef.current.add(id)
     void run(async () => {
-      await api(base + '/' + document.document_id, 'DELETE')
-      const remaining = documents.filter(item => item.document_id !== document.document_id)
-      setDocuments(remaining)
-      setSelectedSources(current => current.filter(id => id !== document.document_id))
-      if (selectedId === document.document_id) select(remaining[0]?.document_id, 1, false)
+      try {
+        await api(base + '/' + id, 'DELETE')
+      } catch (failure) {
+        if (!(failure instanceof ApiError && failure.status === 404)) {
+          deletedIdsRef.current.delete(id)
+          throw failure
+        }
+      }
+      const remaining = documents.filter(item => item.document_id !== id)
+      setDocuments(current => current.filter(item => item.document_id !== id))
+      setSelectedSources(current => current.filter(sourceId => sourceId !== id))
+      setDocumentJobs(current => {
+        const next = { ...current }
+        delete next[id]
+        latestJobs.current = next
+        return next
+      })
+      if (selectedId === id) {
+        select(remaining[0]?.document_id, 1, false)
+      } else if (citation?.document_id === id) {
+        setCitation(undefined)
+      }
+    })
+  }
+
+  function retryDocument(document: DocumentItem) {
+    const id = document.document_id
+    void run(async () => {
+      let jobs: Job[]
+      try {
+        jobs = await api<Job[]>(base + '/' + id + '/retry', 'POST')
+      } catch (failure) {
+        if (failure instanceof ApiError && failure.status === 409) {
+          jobs = await api<Job[]>(base + '/' + id + '/jobs')
+        } else {
+          throw failure
+        }
+      }
+      const nextEntry = summarizeDocumentJobs(document, jobs)
+      setDocumentJobs(current => {
+        const next = { ...current, [id]: nextEntry }
+        latestJobs.current = next
+        return next
+      })
+      setPollVersion(version => version + 1)
     })
   }
 
@@ -264,9 +411,21 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
     })
   }
 
-  function navigate(next: View) {
+  function navigate(next: WorkspaceView) {
     setView(next)
-    setActiveTab(next === 'chats' || next === 'history' ? 'assistant' : 'sources')
+    setActiveTab(next === 'chats' || next === 'plans' || next === 'history' ? 'assistant' : 'sources')
+    if (next === 'plans') {
+      setRequestedMode(current => ({ mode: 'PLAN', nonce: current.nonce + 1 }))
+    } else if (next === 'chats') {
+      setRequestedMode(current => ({ mode: 'ASK', nonce: current.nonce + 1 }))
+    }
+  }
+
+  function handleAssistantModeChange(nextMode: Mode) {
+    setView(current => {
+      if (current !== 'chats' && current !== 'plans') return current
+      return nextMode === 'PLAN' ? 'plans' : 'chats'
+    })
   }
 
   function openUpload() {
@@ -288,7 +447,7 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
   const readySources = documents.filter(doc => sourceState(doc) === 'succeeded').map(doc => doc.document_id)
   const selectedPreviewJob = selectedDoc && documentJobs[selectedDoc.document_id]?.preview
   function openCitation(target: CitationTarget) {
-    select(target.document_id, target.page, true)
+    if (!select(target.document_id, target.page, true)) return
     setCitation(target)
     requestAnimationFrame(() => reader.current?.focus({ preventScroll: true }))
   }
@@ -323,58 +482,68 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
           ))}
         </nav>
 
-        <div className="workspace-body" data-reader-visible={readerVisible}>
-          <aside className="workspace-sidebar" aria-label="Workspace navigation">
-            {mayWrite && <button className="workspace-upload" type="button" onClick={openUpload}>
-              <DesignIcon name="upload" /> {text('Upload source', 'Tải tài liệu lên')}
-            </button>}
-            <nav className="workspace-nav" aria-label="Workspace sections">
-              {views.map(item => (
-                <button className="workspace-nav-item" key={item.id} type="button"
-                  aria-current={view === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}>
-                  <DesignIcon name={view === item.id ? item.activeIcon ?? item.icon : item.icon} /> {text(item.label, item.vietnamese)}
-                </button>
-              ))}
-            </nav>
-            <Link href="/workspaces" className="workspace-nav-caption" aria-label="Back to workspaces">{text('Workspaces', 'Không gian làm việc')}</Link>
-            <ul className="workspace-links">
-              {workspaces.map(item => {
-                const current = item.workspace_id === workspace.workspace_id
-                return <li key={item.workspace_id}><Link
-                  href={workspaceLocation(item.workspace_id, undefined, 1)} aria-current={current ? 'page' : undefined}>
-                  <DesignIcon name={current ? 'folder-active' : 'folder'} /> <span>{item.name}</span>
-                </Link></li>
-              })}
-            </ul>
-            <fieldset className="workspace-sources" disabled={sourcesLocked}>
-              <legend className="workspace-nav-caption">{text('Sources', 'Nguồn')} · {text(`${selectedSources.length} of ${documents.length} active`, `đã chọn ${selectedSources.length}/${documents.length}`)}</legend>
-              {documents.map(doc => {
-                const checked = selectedSources.includes(doc.document_id)
-                const state = sourceState(doc)
-                return <label className="workspace-source" key={doc.document_id} data-checked={checked}>
-                  <input type="checkbox" aria-label={doc.name} checked={checked} disabled={state !== 'succeeded'}
-                    onChange={event => updateSource(doc.document_id, event.currentTarget.checked)} />
-                  <DesignIcon name="file" /><span className="source-name" title={doc.name}>{doc.name}</span>
-                  {state !== 'succeeded' && <span className={'badge badge-' + jobColors[state]}>{text(filters[state], vietnameseFilters[state])}</span>}
-                </label>
-              })}
-            </fieldset>
-          </aside>
+        <div
+          ref={workspaceBody}
+          className="workspace-body"
+          data-reader-visible={readerVisible}
+          data-resizing={activeSide ? 'true' : undefined}
+          style={bodyStyle}
+        >
+          <WorkspaceSidebar
+            sidebarRef={sidebar}
+            workspace={workspace}
+            workspaces={workspaces}
+            mayWrite={mayWrite}
+            view={view}
+            documents={documents}
+            selectedId={selectedId}
+            selectedSources={selectedSources}
+            sourcesLocked={sourcesLocked}
+            sourceState={doc => sourceState(documents.find(item => item.document_id === doc.document_id) ?? ({ ...doc, workspace_id: workspace.workspace_id, filename: doc.name, media_type: 'application/pdf', size_bytes: 0, preview_ready: false, created_at: '' }))}
+            onUpload={openUpload}
+            onNavigate={navigate}
+            onToggleSource={updateSource}
+            onOpenDocument={id => select(id, 1, true)}
+          />
+          <div
+            role="separator"
+            tabIndex={0}
+            aria-orientation="vertical"
+            aria-label={text('Resize navigation sidebar', 'Thay đổi độ rộng thanh điều hướng')}
+            aria-valuemin={PANEL_BOUNDS.sidebar.min}
+            aria-valuemax={PANEL_BOUNDS.sidebar.max}
+            aria-valuenow={effectiveWidths.sidebar ?? 264}
+            className="workspace-resizer"
+            data-side="sidebar"
+            data-dragging={activeSide === 'sidebar' ? 'true' : undefined}
+            onPointerDown={event => startResize('sidebar', event)}
+            onDoubleClick={() => resetWidth('sidebar')}
+            onKeyDown={event => handleKeyDown('sidebar', event)}
+          />
 
           <div id="panel-main" className="workspace-center" data-mobile-active={activeTab !== 'reader'}>
             <nav className="workspace-compact-nav" aria-label="Workspace sections">
-              {views.map(item => <button className="workspace-nav-item" key={item.id} type="button"
-                aria-current={view === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}>
-                <DesignIcon name={item.icon} /> {text(item.label, item.vietnamese)}
-              </button>)}
+              {WORKSPACE_VIEWS.map(item => (
+                <button
+                  className="workspace-nav-item"
+                  key={item.id}
+                  type="button"
+                  aria-current={view === item.id ? 'page' : undefined}
+                  onClick={() => navigate(item.id)}
+                >
+                  <DesignIcon name={view === item.id ? item.activeIcon ?? item.icon : item.icon} />
+                  <span>{text(item.label, item.vietnamese)}</span>
+                </button>
+              ))}
               <Link href="/workspaces" aria-label="Back to workspaces">{text('Workspaces', 'Không gian làm việc')}</Link>
             </nav>
             {!readerVisible && <button type="button" className="secondary sm reader-open"
               onClick={() => setReaderVisible(true)}><DesignIcon name="panel" /> Show reader</button>}
-            <div className="workspace-chat" hidden={view !== 'chats' && view !== 'history'}>
+            <div className="workspace-chat" hidden={view !== 'chats' && view !== 'plans' && view !== 'history'}>
               <InteractionPanel workspaceId={workspace.workspace_id} workspaceName={workspace.name}
                 documents={documents} readySources={readySources} selectedSources={selectedSources} setSelectedSources={setSelectedSources}
                 onSourcesLock={setSourcesLocked} showHistory={view === 'history'}
+                requestedMode={requestedMode} onModeChange={handleAssistantModeChange}
                 canPublish={mayWrite} onCitation={openCitation} onOpenArtifact={id => {
                   setOpenedArtifact(id)
                   navigate('artifacts')
@@ -428,8 +597,24 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
                         {documentJobs[doc.document_id]?.error && <div className="muted">
                           {documentJobs[doc.document_id].error === 'parse_timeout' ? text('Processing time limit exceeded. Preview remains available.', 'Vượt thời gian xử lý. Bạn vẫn có thể xem tài liệu.') : documentJobs[doc.document_id].error === 'no_text' ? text('No text found. Scanned PDFs need OCR, which is not enabled.', 'Không tìm thấy văn bản. PDF scan cần OCR, hiện chưa hỗ trợ.') : documentJobs[doc.document_id].error?.replaceAll('_', ' ')}
                         </div>}</td>
-                      <td>{doc.preview_ready && <button type="button" className="secondary sm" aria-label={'Open ' + doc.name}
-                        onClick={() => select(doc.document_id)}>{text('Open', 'Mở')}</button>}</td>
+                      <td>
+                        <div className="actions">
+                          {doc.preview_ready && <button type="button" className="secondary sm" aria-label={text('Open ' + doc.name, 'Mở ' + doc.name)}
+                            onClick={() => select(doc.document_id)}>{text('Open', 'Mở')}</button>}
+                          {mayWrite && state === 'failed' && <button type="button" className="secondary sm" disabled={busy}
+                            aria-label={text('Retry ' + doc.name, 'Thử lại ' + doc.name)}
+                            onClick={() => retryDocument(doc)} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <RefreshCw size={13} aria-hidden="true" />
+                            <span>{text('Retry', 'Thử lại')}</span>
+                          </button>}
+                          {mayWrite && <button type="button" className="danger sm" disabled={busy}
+                            aria-label={text('Delete ' + doc.name, 'Xóa ' + doc.name)}
+                            onClick={() => remove(doc)} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <Trash2 size={13} aria-hidden="true" />
+                            <span>{text('Delete', 'Xóa')}</span>
+                          </button>}
+                        </div>
+                      </td>
                     </tr>
                   })}</tbody>
                 </table>
@@ -448,52 +633,92 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
             </div>
             {view === 'notes' && <section className="form-stack">
               <header className="aipollo-section-heading"><div><h1>{text('Notes', 'Ghi chú')}</h1><p>{workspace.name}</p></div></header>
-              <p className="muted">{selectedDoc ? 'View and edit personal page notes in the document reader.' : 'Add a source to write a page note.'}</p>
+              <p className="muted">{selectedDoc
+                ? text('View and edit personal page notes in the document reader.', 'Xem và chỉnh sửa ghi chú trang cá nhân trong trình đọc tài liệu.')
+                : text('Add a source to write a page note.', 'Thêm tài liệu để viết ghi chú trang.')}</p>
               {selectedDoc && <button type="button" className="secondary sm"
-                onClick={() => { setReaderVisible(true); setActiveTab('reader'); requestAnimationFrame(() => {
-                  document.getElementById('annotation-body')?.focus()
-                }) }}>Open page notes</button>}
+                onClick={() => {
+                  setReaderVisible(true)
+                  setActiveTab('reader')
+                  requestAnimationFrame(() => {
+                    const body = document.getElementById('annotation-body')
+                    if (body) {
+                      body.focus()
+                      return
+                    }
+                    const toggle = reader.current?.querySelector<HTMLButtonElement>('.annotations-bar-toggle')
+                    if (toggle && toggle.getAttribute('aria-expanded') === 'false') {
+                      toggle.click()
+                    }
+                    toggle?.focus()
+                  })
+                }}>{text('Open page notes', 'Mở ghi chú trang')}</button>}
             </section>}
           </div>
+          <div
+            role="separator"
+            tabIndex={readerVisible ? 0 : -1}
+            hidden={!readerVisible}
+            aria-orientation="vertical"
+            aria-label={text('Resize document reader', 'Thay đổi độ rộng trình đọc tài liệu')}
+            aria-valuemin={PANEL_BOUNDS.reader.min}
+            aria-valuemax={PANEL_BOUNDS.reader.max}
+            aria-valuenow={effectiveWidths.reader ?? 420}
+            className="workspace-resizer"
+            data-side="reader"
+            data-dragging={activeSide === 'reader' ? 'true' : undefined}
+            onPointerDown={event => startResize('reader', event)}
+            onDoubleClick={() => resetWidth('reader')}
+            onKeyDown={event => handleKeyDown('reader', event)}
+          />
 
           <aside id="panel-reader" ref={reader} tabIndex={-1} aria-label="Document preview" role="region" className="workspace-reader"
             data-mobile-active={activeTab === 'reader'} hidden={!readerVisible}>
-            <div className="reader-topline">
-              <nav className="reader-documents" aria-label="Preview sources">
-                {documents.map(doc => <button key={doc.document_id} type="button" title={doc.name}
-                  aria-pressed={selectedId === doc.document_id} onClick={() => select(doc.document_id)}>
-                  {doc.name}
-                </button>)}
-              </nav>
-              <button type="button" className="ghost reader-hide" aria-label="Hide reader" onClick={() => setReaderVisible(false)}>
-                <DesignIcon name="panel" />
-              </button>
-            </div>
+            <ReaderDocumentBar
+              documents={documents}
+              selectedDoc={selectedDoc}
+              busy={busy}
+              mayWrite={mayWrite}
+              annotationPending={annotationPending}
+              onSelect={id => select(id)}
+              onDownload={download}
+              onRename={renameDocument}
+              onDelete={remove}
+              onHideReader={() => {
+                if (annotationPending) return
+                if (annotationDirty && !window.confirm(text(
+                  'You have an unsaved note draft. Discard draft and hide reader?',
+                  'Bạn có ghi chú chưa lưu. Bỏ bản nháp và ẩn trình đọc?',
+                ))) return
+                setReaderVisible(false)
+              }}
+            />
             {selectedDoc ? <>
-              <details className="reader-file-menu" key={'file-menu-' + selectedDoc.document_id}>
-                <summary><h2>{selectedDoc.name}</h2></summary>
-                <div className="actions">
-                  <button type="button" className="secondary sm" disabled={busy}
-                    onClick={() => download(selectedDoc.document_id)}>Download original</button>
-                  {mayWrite && <button type="button" className="danger sm" disabled={busy}
-                    onClick={() => remove(selectedDoc)}>Delete document</button>}
-                </div>
-                {mayWrite && <form className="inline-form" method="post"
-                  onSubmit={event => rename(event, selectedDoc.document_id)}>
-                  <label>Document name<input name="name" defaultValue={selectedDoc.name} maxLength={200} required /></label>
-                  <button type="submit" disabled={busy} className="sm">Save name</button>
-                </form>}
-              </details>
               {error && view !== 'library' && <p role="alert"><DesignIcon name="error" /> {error}</p>}
               {selectedDoc.preview_ready ? <AnnotatedPreview key={'preview-' + selectedDoc.document_id}
-                documentUrl={base + '/' + selectedDoc.document_id} page={page}
+                onPendingChange={setAnnotationPending} onDirtyChange={setAnnotationDirty} documentUrl={base + '/' + selectedDoc.document_id} page={page}
                 citation={citation} onClearCitation={() => setCitation(current => current ? { ...current, region: undefined, regions: undefined } : undefined)}
                 onPage={next => select(selectedDoc.document_id, next, false)} /> : (
                 <p role="status" className="reader-empty">{selectedPreviewJob === 'failed' ? 'Preview could not be generated.'
                   : selectedPreviewJob === 'cancelled' ? 'Preview was cancelled.'
                   : selectedPreviewJob === 'running' ? 'Generating PDF preview…' : 'PDF preview is queued.'}</p>
               )}
-            </> : <p className="reader-empty muted">Select a document to preview it.</p>}
+            </> : citation ? (
+              <section className="reader-empty form-stack" aria-label={text('Unavailable citation source', 'Nguồn trích dẫn không còn khả dụng')}>
+                <p className="muted">
+                  {text(
+                    'This source document has been deleted from the workspace. The saved citation snapshot is preserved below.',
+                    'Tài liệu nguồn này đã bị xóa khỏi workspace. Nội dung trích dẫn đã lưu vẫn được giữ lại bên dưới.'
+                  )}
+                </p>
+                <div className="reader-annotations form-stack">
+                  <h3>
+                    <DesignIcon name="annotate" /> {citation.name ? `${citation.name} · ` : ''}{text('p.', 'tr.')} {citation.page}
+                  </h3>
+                  {citation.text && <p className="muted">{citation.text}</p>}
+                </div>
+              </section>
+            ) : <p className="reader-empty muted">{text('Select a document to preview it.', 'Chọn một tài liệu để xem trước.')}</p>}
           </aside>
         </div>
       </main>

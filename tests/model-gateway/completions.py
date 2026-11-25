@@ -20,8 +20,8 @@ class CompletionRetry(unittest.IsolatedAsyncioTestCase):
             status = statuses[len(calls) - 1]
             if status is None:
                 raise httpx.ReadTimeout("fixture timeout", request=request)
-            if error is not None:
-                return httpx.Response(status,json={"error":error})
+            if error is not None and status >= 400:
+                return httpx.Response(status, json={"error": error})
             return httpx.Response(status, json={"choices": [{"finish_reason": "length" if content is None else "stop",
                 "message": {"content": content, "reasoning_content": "private-fixture-reasoning"}}],
                 "usage": {"completion_tokens": 2048, "completion_tokens_details": {"reasoning_tokens": 2048}}})
@@ -103,6 +103,21 @@ class CompletionRetry(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("error=HTTPStatusError", logs.output[-1])
         self.assertIn("upstream_status=503", logs.output[-1])
+
+    async def test_strips_unsupported_optional_parameters_on_400(self):
+        for param, error in (
+            ("reasoning_effort", {"code": "unsupported_parameter", "param": "reasoning_effort", "message": "unknown"}),
+            ("response_format", {"code": "invalid_value", "message": "response_format json_object not supported"}),
+        ):
+            with self.subTest(param=param):
+                response, calls = await self.request(
+                    [400, 200], retry=False, effort="none", response_format="json_object", error=error,
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["text"], "answer")
+                self.assertEqual(len(calls), 2)
+                self.assertIn(param, calls[0])
+                self.assertNotIn(param, calls[1])
 
     async def test_no_retry_for_other_errors_or_unflagged_call(self):
         for status, retry in ((503, False), (429, True), (None, True)):

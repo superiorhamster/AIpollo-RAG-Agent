@@ -84,6 +84,34 @@ async def jobs(workspace_id: UUID, document_id: UUID, request: Request) -> list[
         return [Job.model_validate(row) for row in result.mappings()]
 
 
+@app.post("/internal/v1/workspaces/{workspace_id}/documents/{document_id}/jobs/retry",
+          response_model=list[Job], include_in_schema=False)
+async def retry_document_jobs(workspace_id: UUID, document_id: UUID, request: Request) -> list[Job]:
+    if not hmac.compare_digest(request.headers.get("X-Ingestion-Service-Token", "").encode(),
+                               app.state.token.encode()):
+        raise unauthorized()
+    async with app.state.database.begin() as connection:
+        await connection.execute(text("""
+            SELECT pg_advisory_xact_lock(hashtextextended(CAST(:ws AS text), 2003))
+        """), {"ws": workspace_id})
+        retried = (await connection.execute(text("""
+            UPDATE ingestion.jobs j
+            SET status = 'queued', attempts = 0, error_code = NULL,
+                next_attempt = now(), lease_id = NULL, lease_until = NULL, updated_at = now()
+            WHERE j.workspace_id = :ws AND j.document_id = :id AND j.status = 'failed'
+              AND NOT EXISTS (SELECT 1 FROM ingestion.cancelled_workspaces c WHERE c.workspace_id = j.workspace_id)
+              AND NOT EXISTS (SELECT 1 FROM ingestion.cancelled_documents c WHERE c.document_id = j.document_id)
+            RETURNING job_id
+        """), {"ws": workspace_id, "id": document_id})).all()
+        if not retried:
+            raise ApiError(409, "job_not_retryable", "Only failed jobs for active documents can be retried.")
+        result = await connection.execute(text("""
+            SELECT job_id, kind, status, attempts, error_code, updated_at
+            FROM ingestion.jobs WHERE workspace_id = :ws AND document_id = :id ORDER BY kind
+        """), {"ws": workspace_id, "id": document_id})
+        return [Job.model_validate(row) for row in result.mappings()]
+
+
 @app.post("/internal/v1/workspaces/{workspace_id}/active-indexes", include_in_schema=False)
 async def active_indexes(workspace_id: UUID, selection: GenerationSelection, request: Request) -> list[ActiveIndex]:
     token = request.headers.get("X-Index-Service-Token", "").encode()

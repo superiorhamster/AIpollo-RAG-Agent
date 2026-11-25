@@ -25,9 +25,19 @@ SERVICE = "model-gateway"
 LOG = logging.getLogger("uvicorn.error")
 
 GEMINI_CONCURRENCY = 4
-# Compatibility name retained for adapter tests; applies to every protocol.
+# Compatibility name retained for adapter tests; applies to every provider.
 GEMINI_BATCH_TIMEOUT_SECONDS = RuntimeBudgets.from_env().embedding
-OLLAMA_OPTIONS = {"num_ctx": 8192, "num_thread": 4}
+CHAT_COMPLETION_TIMEOUT_SECONDS = 55
+OPTIONAL_CHAT_PARAMS = ("reasoning_effort", "response_format")
+GEMINI_EMBEDDING_2_MODELS = {"gemini-embedding-2", "gemini-embedding-2-preview"}
+GEMINI_RETRIEVAL_FORMAT = "gemini-embedding-2:retrieval-v1"
+
+
+def uses_gemini_retrieval_format() -> bool:
+    return (
+        os.environ.get("MODEL_EMBEDDING_PROTOCOL", "openai") == "openai"
+        and os.environ.get("MODEL_EMBEDDING_NAME") in GEMINI_EMBEDDING_2_MODELS
+    )
 
 
 def model_unavailable() -> ApiError:
@@ -42,8 +52,7 @@ def valid_provider_url(url: str, *, embedding: bool = False) -> bool:
         return True
     return (
         parsed.scheme == "http"
-        and parsed.hostname in ({"host.docker.internal", "localhost", "127.0.0.1", "::1"}
-                               | ({"ollama"} if embedding else set()))
+        and parsed.hostname in {"host.docker.internal", "localhost", "127.0.0.1", "::1"}
         and os.environ.get("MODEL_ALLOW_LOCAL_HTTP") == "true"
     )
 
@@ -61,11 +70,13 @@ def load_embedding_config() -> EmbeddingConfig | None:
         raise ValueError("Set a valid embedding provider URL using HTTPS or explicitly enabled local HTTP.")
     revision = os.environ.get("MODEL_EMBEDDING_REVISION", "1")
     protocol = os.environ.get("MODEL_EMBEDDING_PROTOCOL", "openai")
-    if protocol not in {"openai", "ollama"}:
-        raise ValueError("Choose openai or ollama as the embedding protocol.")
+    if protocol != "openai":
+        raise ValueError("Choose openai as the embedding protocol.")
     identity = f"{endpoint}\n{model}\n{dimensions}\n{revision}"
-    if protocol == "ollama":
-        identity += "\nollama:" + json.dumps(OLLAMA_OPTIONS, sort_keys=True) + ":truncate=false"
+    if uses_gemini_retrieval_format():
+        if not 128 <= int(dimensions) <= 3072:
+            raise ValueError("Gemini Embedding 2 requires 128 to 3072 output dimensions.")
+        identity += "\n" + GEMINI_RETRIEVAL_FORMAT
     version = hashlib.sha256(identity.encode()).hexdigest()
     return EmbeddingConfig(fingerprint=version, dimensions=int(dimensions))
 
@@ -74,7 +85,7 @@ def load_embedding_config() -> EmbeddingConfig | None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.embedding_config = load_embedding_config()
     app.state.token = os.environ["MODEL_EMBEDDING_TOKEN"].encode()
-    async with httpx.AsyncClient(timeout=httpx.Timeout(25, connect=5), trust_env=False) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(CHAT_COMPLETION_TIMEOUT_SECONDS, connect=5), trust_env=False) as client:
         app.state.client = client
         yield
 
@@ -133,12 +144,13 @@ async def embed_batch(data: EmbeddingBatch, request: Request) -> EmbeddingResult
         return EmbeddingResult(vectors=[fixture_vector(item, config.dimensions) for item in data.texts])
 
     base_url = os.environ["MODEL_EMBEDDING_BASE_URL"].rstrip("/")
-    if os.environ.get("MODEL_EMBEDDING_PROTOCOL", "openai") == "ollama":
-        vectors = await fetch_embeddings(request, base_url, data.texts, config.dimensions, False, ollama=True)
-        return EmbeddingResult(vectors=vectors)
+    texts = data.texts
+    if uses_gemini_retrieval_format():
+        prefix = "task: search result | query: " if data.input_type == "query" else "title: none | text: "
+        texts = [prefix + text for text in texts]
     gemini = urlsplit(base_url).hostname == "generativelanguage.googleapis.com"
     if not gemini:
-        vectors = await fetch_embeddings(request, base_url, data.texts, config.dimensions, False)
+        vectors = await fetch_embeddings(request, base_url, texts, config.dimensions, False)
         return EmbeddingResult(vectors=vectors)
 
     semaphore = asyncio.Semaphore(GEMINI_CONCURRENCY)
@@ -147,7 +159,7 @@ async def embed_batch(data: EmbeddingBatch, request: Request) -> EmbeddingResult
         async with semaphore:
             return await fetch_embeddings(request, base_url, [text], config.dimensions, True)
 
-    tasks = [asyncio.create_task(singleton(text)) for text in data.texts]
+    tasks = [asyncio.create_task(singleton(text)) for text in texts]
     try:
         async with asyncio.timeout(GEMINI_BATCH_TIMEOUT_SECONDS):
             batches = await asyncio.gather(*tasks)
@@ -161,14 +173,14 @@ async def embed_batch(data: EmbeddingBatch, request: Request) -> EmbeddingResult
 
 
 async def fetch_embeddings(
-    request: Request, base_url: str, texts: list[str], dimensions: int, gemini: bool, *, ollama: bool = False,
+    request: Request, base_url: str, texts: list[str], dimensions: int, gemini: bool,
 ) -> list[list[float]]:
     payload: dict[str, object] = {"model": os.environ["MODEL_EMBEDDING_NAME"], "input": texts}
-    if ollama:
-        payload.update(options=OLLAMA_OPTIONS, dimensions=dimensions, truncate=False, keep_alive=-1)
+    if uses_gemini_retrieval_format():
+        payload["dimensions"] = dimensions
     try:
         response = await app.state.client.post(
-            base_url + ("/api/embed" if ollama else "/embeddings"),
+            base_url + "/embeddings",
             headers={"Authorization": "Bearer " + os.environ["MODEL_EMBEDDING_API_KEY"],
                      "X-Request-ID": request_id(request)},
             json=payload, timeout=httpx.Timeout(GEMINI_BATCH_TIMEOUT_SECONDS, connect=5),
@@ -180,11 +192,7 @@ async def fetch_embeddings(
     if response.status_code != 200:
         raise ApiError(503, "provider_unavailable", "The embedding provider rejected the request.")
     try:
-        if ollama:
-            vectors = response.json()["embeddings"]
-            if not isinstance(vectors, list) or len(vectors) != len(texts):
-                raise ValueError("Invalid Ollama embedding batch count")
-        elif gemini:
+        if gemini:
             rows = response.json()["data"]
             # Each request has one input, so an omitted index is unambiguous.
             if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
@@ -197,7 +205,7 @@ async def fetch_embeddings(
             rows = sorted(rows, key=lambda item: item["index"])
             if [row["index"] for row in rows] != list(range(len(texts))):
                 raise ValueError("Invalid embedding batch order")
-        result = EmbeddingResult(vectors=vectors if ollama else [row["embedding"] for row in rows])
+        result = EmbeddingResult(vectors=[row["embedding"] for row in rows])
         if any(len(vector) != dimensions or not any(vector) for vector in result.vectors):
             raise ValueError("Invalid embedding dimensions or zero vector")
     except (ValueError, KeyError, TypeError, ValidationError) as exc:
@@ -207,19 +215,43 @@ async def fetch_embeddings(
 
 class Message(BaseModel):
     role: Literal["system", "user"]
-    content: str = Field(min_length=1, max_length=24_000)
+    content: str = Field(min_length=1, max_length=36_000)
 
 
 class CompletionInput(BaseModel):
     messages: list[Message] = Field(min_length=1, max_length=8)
-    max_tokens: int = Field(default=800, ge=32, le=2048)
+    max_tokens: int = Field(default=800, ge=32, le=4096)
     retry_on_unavailable: bool = False
 
 
 class CompletionOutput(BaseModel):
-    text: str = Field(min_length=1, max_length=18_000)
+    text: str = Field(min_length=1, max_length=32_000)
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+
+
+def _unsupported_optional_param(response: httpx.Response, body: dict[str, object]) -> str | None:
+    """Return an optional chat parameter name if the upstream 400/422 specifically rejected it."""
+    if response.status_code not in (400, 422):
+        return None
+    try:
+        error = response.json().get("error", {})
+        if not isinstance(error, dict):
+            return None
+    except (ValueError, AttributeError):
+        return None
+    param = error.get("param")
+    if isinstance(param, str) and param in OPTIONAL_CHAT_PARAMS and param in body:
+        return param
+    code = error.get("code") or error.get("type")
+    if param is None and code in {"unsupported_parameter", "invalid_request_error", "invalid_value"}:
+        message = str(error.get("message") or "").casefold()
+        for candidate in OPTIONAL_CHAT_PARAMS:
+            if candidate in body and candidate in message:
+                return candidate
+        if "response_format" in body and "json_object" in message:
+            return "response_format"
+    return None
 
 
 @app.post("/internal/v1/completions")
@@ -253,8 +285,8 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
     started = perf_counter()
     response = None
     headers = {"Authorization": "Bearer " + key, "X-Request-ID": request_id(request)}
-    body = {"model": model, "max_tokens": data.max_tokens, "stream": False,
-            "messages": [item.model_dump() for item in data.messages]}
+    body: dict[str, object] = {"model": model, "max_tokens": data.max_tokens, "stream": False,
+                               "messages": [item.model_dump() for item in data.messages]}
     response_format = os.environ.get("MODEL_CHAT_RESPONSE_FORMAT", "")
     if response_format:
         if response_format != "json_object":
@@ -266,14 +298,25 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
             raise ApiError(503, "chat_model_unavailable", "The configured reasoning effort is invalid.")
         body["reasoning_effort"] = effort
     try:
-        # The Ask worker waits up to 30 seconds. Bound both attempts together.
-        async with asyncio.timeout(28 if data.retry_on_unavailable else None):
-            response = await app.state.client.post(base + "/chat/completions", headers=headers, json=body)
-            if data.retry_on_unavailable and response.status_code == 503:
-                LOG.info("Chat completion retry request_id=%s upstream_status=503", request_id(request))
-                await asyncio.sleep(0.25)
-                response = None
+        retried_503 = False
+        stripped: set[str] = set()
+        async with asyncio.timeout(CHAT_COMPLETION_TIMEOUT_SECONDS):
+            while True:
                 response = await app.state.client.post(base + "/chat/completions", headers=headers, json=body)
+                if data.retry_on_unavailable and response.status_code == 503 and not retried_503:
+                    retried_503 = True
+                    LOG.info("Chat completion retry request_id=%s upstream_status=503", request_id(request))
+                    await asyncio.sleep(0.25)
+                    response = None
+                    continue
+                bad_param = _unsupported_optional_param(response, body)
+                if bad_param and bad_param not in stripped:
+                    stripped.add(bad_param)
+                    body.pop(bad_param, None)
+                    LOG.info("Chat completion stripped unsupported param=%s request_id=%s", bad_param, request_id(request))
+                    response = None
+                    continue
+                break
         response.raise_for_status()
         result = response.json()
         usage = result.get("usage") or {}

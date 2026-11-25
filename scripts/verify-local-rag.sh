@@ -16,7 +16,8 @@ export COMPOSE_PROJECT_NAME="rag-local-test-$$-$RANDOM"
 export WEB_ORIGIN=http://127.0.0.1:3000 WEB_PORT=0 API_GATEWAY_PORT=0 POSTGRES_PORT=0 REDIS_PORT=0
 export RABBITMQ_AMQP_PORT=0 RABBITMQ_MANAGEMENT_PORT=0 MINIO_API_PORT=0 MINIO_CONSOLE_PORT=0
 export QDRANT_HTTP_PORT=0 QDRANT_GRPC_PORT=0
-compose=(docker compose --env-file .env -f compose.dev.yaml -f compose.ollama.yaml)
+compose=(docker compose --env-file .env)
+for file in ${COMPOSE_FILES:-compose.dev.yaml}; do compose+=(-f "$file"); done
 artifact_dir="$PWD/test-results/$COMPOSE_PROJECT_NAME"
 mkdir -p "$artifact_dir"
 cleanup() {

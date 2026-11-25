@@ -44,6 +44,8 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:${WEB_PORT:-23000}:3000"
+    mem_limit: 512m
+    cpus: 1
 
   api-gateway:
     build:
@@ -83,6 +85,8 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:${API_GATEWAY_PORT:-23001}:8000"
+    mem_limit: 512m
+    cpus: 1
 
   auth-service:
     build: *auth-build
@@ -109,6 +113,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    mem_limit: 384m
+    cpus: 0.5
 
   identity-tests:
     profiles: [phase01-test]
@@ -116,6 +122,8 @@ services:
       <<: *backend-build
       args: { SERVICE: auth-service, TEST_GROUP: test }
     environment: *auth-test-environment
+    mem_limit: 512m
+    cpus: 1
 
   workspace-service:
     build: *workspace-build
@@ -137,6 +145,8 @@ services:
         condition: service_completed_successfully
       auth-service:
         condition: service_healthy
+    mem_limit: 384m
+    cpus: 0.5
 
   db-init:
     image: postgres:17-alpine
@@ -163,6 +173,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.5
 
   auth-migrate:
     build: *auth-build
@@ -176,6 +188,8 @@ services:
     depends_on:
       db-init:
         condition: service_completed_successfully
+    mem_limit: 384m
+    cpus: 0.5
 
   workspace-migrate:
     build: *workspace-build
@@ -189,6 +203,8 @@ services:
     depends_on:
       db-init:
         condition: service_completed_successfully
+    mem_limit: 384m
+    cpus: 0.5
 
   phase01-browser-tests:
     profiles: [phase01-test]
@@ -196,6 +212,8 @@ services:
     network_mode: service:web
     environment:
       PHASE01_TEST_ORIGIN: http://127.0.0.1:3000
+    mem_limit: 1g
+    cpus: 1
 
   document-service:
     build: *document-build
@@ -217,6 +235,8 @@ services:
         condition: service_completed_successfully
       workspace-service:
         condition: service_healthy
+    mem_limit: 384m
+    cpus: 0.5
 
   ingestion-service:
     build: *ingestion-build
@@ -246,6 +266,8 @@ services:
         condition: service_healthy
       retrieval-service:
         condition: service_healthy
+    mem_limit: 768m
+    cpus: 1
 
   document-converter:
     build:
@@ -306,6 +328,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.5
 
   document-migrate:
     build: *document-build
@@ -319,6 +343,8 @@ services:
     depends_on:
       db-init:
         condition: service_completed_successfully
+    mem_limit: 384m
+    cpus: 0.5
 
   ingestion-migrate:
     build: *ingestion-build
@@ -332,6 +358,8 @@ services:
     depends_on:
       db-init:
         condition: service_completed_successfully
+    mem_limit: 384m
+    cpus: 0.5
 
   retrieval-service:
     build:
@@ -348,6 +376,8 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
+    mem_limit: 512m
+    cpus: 1
 
   agent-orchestrator:
     build: &orchestration-build
@@ -373,9 +403,9 @@ services:
       RESEARCH_MAX_TOTAL_OUTPUT_TOKENS: ${RESEARCH_MAX_TOTAL_OUTPUT_TOKENS:-16384}
       RESEARCH_MAX_MODEL_CALLS: ${RESEARCH_MAX_MODEL_CALLS:-12}
       RUN_MAX_ATTEMPTS: ${RUN_MAX_ATTEMPTS:-2}
-      RUN_MAX_OUTPUT_TOKENS: ${RUN_MAX_OUTPUT_TOKENS:-800}
+      RUN_MAX_OUTPUT_TOKENS: ${RUN_MAX_OUTPUT_TOKENS:-2048}
       ASK_SENTENCE_CITATIONS: ${ASK_SENTENCE_CITATIONS:-legacy}
-      RUN_MAX_INPUT_BYTES: ${RUN_MAX_INPUT_BYTES:-14000}
+      RUN_MAX_INPUT_BYTES: ${RUN_MAX_INPUT_BYTES:-20000}
       RUN_MAX_STEPS: ${RUN_MAX_STEPS:-2}
       RUN_MAX_COST_MICRO_USD: ${RUN_MAX_COST_MICRO_USD:-0}
       MODEL_CHAT_INPUT_MICRO_USD_PER_1K: ${MODEL_CHAT_INPUT_MICRO_USD_PER_1K:-0}
@@ -388,6 +418,8 @@ services:
         condition: service_healthy
       model-gateway:
         condition: service_healthy
+    mem_limit: 512m
+    cpus: 1
 
   orchestration-migrate:
     build: *orchestration-build
@@ -401,6 +433,8 @@ services:
     depends_on:
       db-init:
         condition: service_completed_successfully
+    mem_limit: 384m
+    cpus: 0.5
 
   artifact-service:
     build: &artifact-build
@@ -418,6 +452,8 @@ services:
     depends_on:
       artifact-migrate:
         condition: service_completed_successfully
+    mem_limit: 384m
+    cpus: 0.5
 
   artifact-migrate:
     build: *artifact-build
@@ -431,6 +467,8 @@ services:
     depends_on:
       db-init:
         condition: service_completed_successfully
+    mem_limit: 384m
+    cpus: 0.5
 
   model-gateway:
     build:
@@ -457,6 +495,8 @@ services:
       MODEL_EMBEDDING_DIMENSIONS: ${MODEL_EMBEDDING_DIMENSIONS:-}
       MODEL_EMBEDDING_REVISION: ${MODEL_EMBEDDING_REVISION:-1}
       MODEL_EMBEDDING_PROTOCOL: ${MODEL_EMBEDDING_PROTOCOL:-openai}
+    mem_limit: 384m
+    cpus: 0.5
 
   admin-service:
     build:
@@ -467,6 +507,8 @@ services:
     depends_on:
       auth-service:
         condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.5
 
   postgres:
     image: postgres:17-alpine
@@ -483,6 +525,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    mem_limit: 512m
+    cpus: 1
 
   redis:
     image: redis:7-alpine
@@ -495,6 +539,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    mem_limit: 256m
+    cpus: 0.5
 
   rabbitmq:
     image: rabbitmq:4-management-alpine
@@ -513,6 +559,8 @@ services:
       interval: 10s
       timeout: 15s
       retries: 15
+    mem_limit: 512m
+    cpus: 1
 
   qdrant:
     image: qdrant/qdrant:v1.20.2
@@ -535,6 +583,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    mem_limit: 1g
+    cpus: 1
 
   minio:
     build: ./infra/minio
@@ -547,6 +597,8 @@ services:
       - "127.0.0.1:${MINIO_CONSOLE_PORT:-23009}:9001"
     volumes:
       - minio_data:/data
+    mem_limit: 512m
+    cpus: 1
 
 networks:
   document-preview:

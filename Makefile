@@ -4,10 +4,12 @@ export COMPOSE_FILES
 COMPOSE := docker compose --env-file .env $(foreach file,$(COMPOSE_FILES),-f $(file))
 INFRA_SERVICES := postgres redis rabbitmq qdrant minio
 WAIT_TIMEOUT ?= 180
+WATCH ?= 1
+WATCH_FILES := $(if $(filter 0,$(WATCH)),,-f compose.watch.yaml)
 PRODUCTION_ENV ?= .env.production
 PRODUCTION_COMPOSE := docker compose --env-file "$(PRODUCTION_ENV)" -f compose.dev.yaml -f compose.prod.yaml
 
-.PHONY: check env bootstrap compose-check up ps logs down verify verify-app verify-phase01 verify-phase02 verify-phase03 verify-ui verify-local-rag verify-provider verify-embedding eval-embedding reindex-embeddings promote-admin \
+.PHONY: check env bootstrap compose-check up watch ps logs down verify verify-app verify-phase01 verify-phase02 verify-phase03 verify-ui verify-local-rag verify-provider verify-embedding eval-embedding reindex-embeddings promote-admin \
         infra-up infra-down infra-ps infra-logs verify-infra clean-infra
 
 check:
@@ -17,14 +19,19 @@ env:
 	@bash scripts/setup-env.sh
 
 bootstrap: check
-	$(MAKE) up
+	$(MAKE) WATCH=0 up
 	$(MAKE) verify
 
 compose-check: env
 	$(COMPOSE) config --quiet
+	$(COMPOSE) -f compose.watch.yaml config --quiet
 
 up: env
-	$(COMPOSE) up --build --wait --wait-timeout $(WAIT_TIMEOUT)
+	$(COMPOSE) $(WATCH_FILES) up --build --wait --wait-timeout $(WAIT_TIMEOUT)
+	@if [ "$(WATCH)" != "0" ]; then $(COMPOSE) -f compose.watch.yaml watch --no-up; fi
+
+watch: env
+	$(COMPOSE) -f compose.watch.yaml watch --no-up
 
 ps:
 	$(COMPOSE) ps --all

@@ -30,7 +30,7 @@ SYSTEM = (
 
 
 OUTPUTS = {
-    "answer": "Write a concise answer with one factual claim per entry.",
+    "answer": "Write a clear, thorough, well-explained answer covering all relevant details supported by the evidence, with grounded claims per entry.",
     "explanation": "Explain the concept in increasing detail and use only evidence-backed examples.",
     "study_guide": "Organize learning objectives, key concepts, and revision prompts in ordered entries.",
     "quiz": "Use one exercise per entry, with a question, plausible options and an explained answer.",
@@ -75,7 +75,7 @@ class Worker:
         self.budgets = RuntimeBudgets.from_env()
         self.timeout = self.budgets.run
         self.max_attempts = min(3, max(1, int(os.environ.get("RUN_MAX_ATTEMPTS", "2"))))
-        self.max_tokens = min(2048, max(32, int(os.environ.get("RUN_MAX_OUTPUT_TOKENS", "800"))))
+        self.max_tokens = min(4096, max(32, int(os.environ.get("RUN_MAX_OUTPUT_TOKENS", "2048"))))
         self.citation_mode = os.environ.get("ASK_SENTENCE_CITATIONS", "legacy")
         self.max_steps = min(2, max(1, int(os.environ.get("RUN_MAX_STEPS", "2"))))
         self.max_input_bytes = input_limit()
@@ -190,7 +190,7 @@ class Worker:
         if retry_on_unavailable:
             payload["retry_on_unavailable"] = True
         response = await self.client.post(
-            "http://model-gateway:8000/internal/v1/completions", timeout=30,
+            "http://model-gateway:8000/internal/v1/completions", timeout=60,
             headers={"X-Model-Service-Token": os.environ["MODEL_CHAT_TOKEN"],
                      "X-Request-ID": str(run["request_id"])},
             json=payload,
@@ -228,7 +228,7 @@ class Worker:
             return original, cost
 
     async def attribute(self, run, claims, parents, spent, deadline):
-        tokens = min(self.max_tokens, 512)
+        tokens = min(self.max_tokens, 1024)
 
         def fits(content):
             return (len((ATTRIBUTION_SYSTEM + content).encode()) <= self.max_input_bytes
@@ -238,12 +238,12 @@ class Worker:
         if not lookup or deadline is None:
             return claims
         await self.current(run)
-        seconds = min(8, deadline - asyncio.get_running_loop().time() - 5)
+        seconds = min(28, deadline - asyncio.get_running_loop().time() - 5)
         if seconds <= 0:
             return claims
         try:
             async with asyncio.timeout(seconds):
-                output = await self.complete(run, ATTRIBUTION_SYSTEM, content, tokens)
+                output = await self.complete(run, ATTRIBUTION_SYSTEM, content, tokens, retry_on_unavailable=True)
                 resolved = attributed(claims, output, lookup)
         except (TimeoutError, ValueError, httpx.HTTPError, KeyError, TypeError) as exc:
             CITATION_LOG.info("Ask attribution fallback request_id=%s error=%s", run["request_id"], type(exc).__name__)
@@ -321,7 +321,7 @@ class Worker:
                 fits = (expanded_bytes + len(REPAIR.encode()) <= self.max_input_bytes
                         and self.allows_cost(rewrite_cost + self.estimate_cost(
                             PRIMARY_SEGMENT_SYSTEM, encode(candidate), self.max_tokens)))
-                manageable = len(lookups) <= 32 and overhead <= 2048
+                manageable = len(lookups) <= 32 and overhead <= 6144
                 if fits and (citation_mode == "single" or (citation_mode == "auto" and manageable)):
                     prompt = candidate
                     system = PRIMARY_SEGMENT_SYSTEM
@@ -440,7 +440,7 @@ class Worker:
             f"/users/{run['user_id']}/search", timeout=self.budgets.search_caller,
             headers={"X-Interaction-Service-Token": os.environ["RETRIEVAL_INTERACTION_TOKEN"],
                      "X-Request-ID": str(run["request_id"])},
-            json={"query": objective.query, "document_ids": [str(item) for item in objective.document_ids], "limit": 6},
+            json={"query": objective.query, "document_ids": [str(item) for item in objective.document_ids], "limit": 8},
         )
         if response.status_code == 404:
             raise StopRun("source_unavailable")
@@ -589,7 +589,7 @@ class Worker:
                         f"/users/{run['user_id']}/search", timeout=self.budgets.search_caller,
                         headers={"X-Interaction-Service-Token": os.environ["RETRIEVAL_INTERACTION_TOKEN"],
                                  "X-Request-ID": str(run["request_id"])},
-                        json={"query": query, "document_ids": run["input"]["document_ids"], "limit": 6,
+                        json={"query": query, "document_ids": run["input"]["document_ids"], "limit": 8,
                               **({"include_segments": True}
                                  if self.ask_citation_path(run) in {"auto", "single", "two"} else {})},
                     )

@@ -15,11 +15,12 @@ import httpx
 import urllib3
 from fastapi import FastAPI, Header, Request, Response
 from minio import Minio
-from pydantic import Field, model_validator, BaseModel, StringConstraints, ValidationError
+from pydantic import BaseModel, StringConstraints, ValidationError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 from starlette.concurrency import run_in_threadpool
 
+from app.annotations import AnnotationInput
 from app.storage import DOCX, PDF, filename_from, inspect_file, spool, stream_object
 from rag_db import database_ready, install_database_errors, open_database
 from rag_events import Event, enqueue, run_broker
@@ -87,7 +88,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/readyz")
 async def readiness() -> Response:
-    ready = await database_ready(app.state.database, "documents", "documents_002")
+    ready = await database_ready(app.state.database, "documents", "documents_003")
     if ready:
         try:
             ready = await run_in_threadpool(app.state.storage.bucket_exists, app.state.bucket)
@@ -300,6 +301,28 @@ async def jobs(workspace_id: UUID, document_id: UUID, request: Request) -> list[
         raise unavailable() from exc
 
 
+@app.post(BASE + "/{document_id}/retry")
+async def retry_jobs(workspace_id: UUID, document_id: UUID, request: Request) -> list[dict]:
+    await access(request, workspace_id, write=True)
+    async with app.state.database.connect() as connection:
+        await get_ready(connection, workspace_id, document_id)
+    try:
+        response = await app.state.client.post(
+            f"http://ingestion-service:8000/internal/v1/workspaces/{workspace_id}/documents/{document_id}/jobs/retry",
+            headers={"X-Ingestion-Service-Token": app.state.ingestion_token, "X-Request-ID": request_id(request)},
+        )
+        if response.status_code == 409:
+            payload = response.json()
+            raise ApiError(409, payload.get("code", "job_not_retryable"),
+                           payload.get("message", "Only failed jobs for active documents can be retried."))
+        response.raise_for_status()
+        return response.json()
+    except ApiError:
+        raise
+    except (httpx.HTTPError, ValueError) as exc:
+        raise unavailable() from exc
+
+
 def require_ingestion(request: Request) -> None:
     token = request.headers.get("X-Ingestion-Service-Token", "").encode()
     if not hmac.compare_digest(token, app.state.ingestion_token.encode()):
@@ -435,22 +458,6 @@ async def retrieval_sources(workspace_id: UUID, request: Request) -> list[Docume
         """), {"ws": workspace_id})
         return [Document.model_validate(row) for row in result.mappings()]
 
-class AnnotationInput(BaseModel):
-    page: int = Field(ge=1, le=100_000)
-    body: str = Field(default="", max_length=3000)
-    region: tuple[float, float, float, float] | None = None
-
-    @model_validator(mode="after")
-    def require_content(self):
-        if not self.body.strip() and self.region is None:
-            raise ValueError("Add a note or a highlight")
-        if self.region:
-            left, top, right, bottom = self.region
-            if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1):
-                raise ValueError("The region must be a valid normalized rectangle")
-        return self
-
-
 class AnnotationView(AnnotationInput):
     annotation_id: UUID
     created_at: datetime
@@ -465,25 +472,68 @@ async def list_annotations(workspace_id: UUID, document_id: UUID, request: Reque
     async with app.state.database.connect() as connection:
         await get_ready(connection, workspace_id, document_id)
         rows = await connection.execute(text("""
-            SELECT annotation_id, page, body, region, created_at FROM documents.annotations
+            SELECT annotation_id, page, body, region, regions, embedpdf, created_at FROM documents.annotations
             WHERE workspace_id=:ws AND document_id=:doc AND user_id=:user ORDER BY page, created_at LIMIT 500
         """), {"ws": workspace_id, "doc": document_id, "user": actor.user_id})
         return [dict(row) for row in rows.mappings()]
 
 
 @app.post(ANNOTATIONS, status_code=201, response_model=AnnotationView)
-async def annotate(workspace_id: UUID, document_id: UUID, data: AnnotationInput, request: Request):
+async def annotate(workspace_id: UUID, document_id: UUID, data: AnnotationInput, request: Request,
+                   idempotency_key: Annotated[UUID | None, Header()] = None):
+    actor = await access(request, workspace_id)
+    identifier = idempotency_key or uuid4()
+    params = {"id": identifier, "ws": workspace_id, "doc": document_id, "user": actor.user_id,
+              "page": data.page, "body": data.body, "region": json.dumps(data.region),
+              "regions": json.dumps(data.regions),
+              "embedpdf": json.dumps(data.embedpdf.model_dump()) if data.embedpdf else None}
+    async with app.state.database.begin() as connection:
+        await require_open(connection, workspace_id)
+        await get_ready(connection, workspace_id, document_id)
+        result = await connection.execute(text("""
+            INSERT INTO documents.annotations
+                (annotation_id, workspace_id, document_id, user_id, page, body, region, regions, embedpdf)
+            VALUES (:id, :ws, :doc, :user, :page, :body, CAST(:region AS jsonb),
+                    CAST(:regions AS jsonb), CAST(:embedpdf AS jsonb))
+            ON CONFLICT (annotation_id) DO NOTHING
+            RETURNING annotation_id, page, body, region, regions, embedpdf, created_at
+        """), params)
+        row = result.mappings().one_or_none()
+        if row is None:
+            row = (await connection.execute(text("""
+                SELECT annotation_id, page, body, region, regions, embedpdf, created_at
+                FROM documents.annotations WHERE annotation_id=:id AND workspace_id=:ws
+                    AND document_id=:doc AND user_id=:user
+            """), params)).mappings().one_or_none()
+            if row is None:
+                raise ApiError(409, "annotation_conflict", "Use a new annotation identifier.")
+            stored = {
+                key: row[key] for key in ("page", "body", "region", "regions", "embedpdf")}
+            if AnnotationInput.model_validate(stored).model_dump(mode="json") != data.model_dump(mode="json"):
+                raise ApiError(409, "annotation_conflict", "This annotation identifier was used for different content.")
+        return dict(row)
+
+
+@app.patch(ANNOTATIONS + "/{annotation_id}", response_model=AnnotationView)
+async def update_annotation(workspace_id: UUID, document_id: UUID, annotation_id: UUID,
+                            data: AnnotationInput, request: Request) -> dict[str, object]:
     actor = await access(request, workspace_id)
     async with app.state.database.begin() as connection:
         await require_open(connection, workspace_id)
         await get_ready(connection, workspace_id, document_id)
         result = await connection.execute(text("""
-            INSERT INTO documents.annotations (annotation_id, workspace_id, document_id, user_id, page, body, region)
-            VALUES (:id, :ws, :doc, :user, :page, :body, CAST(:region AS jsonb))
-            RETURNING annotation_id, page, body, region, created_at
-        """), {"id": uuid4(), "ws": workspace_id, "doc": document_id, "user": actor.user_id,
-               "page": data.page, "body": data.body.strip(), "region": json.dumps(data.region)})
-        return dict(result.mappings().one())
+            UPDATE documents.annotations SET page=:page, body=:body, region=CAST(:region AS jsonb),
+                regions=CAST(:regions AS jsonb), embedpdf=CAST(:embedpdf AS jsonb)
+            WHERE annotation_id=:id AND workspace_id=:ws AND document_id=:doc AND user_id=:user
+            RETURNING annotation_id, page, body, region, regions, embedpdf, created_at
+        """), {"id": annotation_id, "ws": workspace_id, "doc": document_id, "user": actor.user_id,
+               "page": data.page, "body": data.body, "region": json.dumps(data.region),
+               "regions": json.dumps(data.regions),
+               "embedpdf": json.dumps(data.embedpdf.model_dump()) if data.embedpdf else None})
+        row = result.mappings().one_or_none()
+        if row is None:
+            raise not_found()
+        return dict(row)
 
 
 @app.delete(ANNOTATIONS + "/{annotation_id}", status_code=204)

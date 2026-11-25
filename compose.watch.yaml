@@ -1,0 +1,225 @@
+x-watch-common:
+  shared-sync: &shared-sync
+    action: sync+restart
+    path: ./services/shared
+    target: /app/shared
+    ignore:
+      - "**/__pycache__/**"
+  services-dockerfile-rebuild: &services-dockerfile-rebuild
+    action: rebuild
+    path: ./services/Dockerfile
+
+services:
+  api-gateway:
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./services/api-gateway/app
+          target: /app/app
+          ignore:
+            - "**/__pycache__/**"
+            - "**/migrations/**"
+        - *shared-sync
+        - action: rebuild
+          path: ./services/api-gateway/pyproject.toml
+        - action: rebuild
+          path: ./services/api-gateway/uv.lock
+        - *services-dockerfile-rebuild
+
+  auth-service:
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./services/auth-service/app
+          target: /app/app
+          ignore:
+            - "**/__pycache__/**"
+            - "**/migrations/**"
+        - *shared-sync
+        - action: rebuild
+          path: ./services/auth-service/pyproject.toml
+        - action: rebuild
+          path: ./services/auth-service/uv.lock
+        - *services-dockerfile-rebuild
+
+  workspace-service:
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./services/workspace-service/app
+          target: /app/app
+          ignore:
+            - "**/__pycache__/**"
+            - "**/migrations/**"
+        - *shared-sync
+        - action: rebuild
+          path: ./services/workspace-service/pyproject.toml
+        - action: rebuild
+          path: ./services/workspace-service/uv.lock
+        - *services-dockerfile-rebuild
+
+  document-service:
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./services/document-service/app
+          target: /app/app
+          ignore:
+            - "**/__pycache__/**"
+            - "**/migrations/**"
+        - *shared-sync
+        - action: rebuild
+          path: ./services/document-service/pyproject.toml
+        - action: rebuild
+          path: ./services/document-service/uv.lock
+        - *services-dockerfile-rebuild
+
+  document-converter:
+    develop:
+      watch:
+        - action: rebuild
+          path: ./services/ingestion-service/app/converter.py
+        - action: rebuild
+          path: ./services/shared/rag_http.py
+        - action: rebuild
+          path: ./services/shared/rag_telemetry.py
+        - action: rebuild
+          path: ./services/ingestion-service/pyproject.toml
+        - action: rebuild
+          path: ./services/ingestion-service/uv.lock
+        - *services-dockerfile-rebuild
+
+  document-parser:
+    develop:
+      watch:
+        - action: rebuild
+          path: ./services/document-parser/app
+          ignore:
+            - "**/__pycache__/**"
+        - action: rebuild
+          path: ./services/shared
+          ignore:
+            - "**/__pycache__/**"
+        - action: rebuild
+          path: ./services/document-parser/pyproject.toml
+        - action: rebuild
+          path: ./services/document-parser/uv.lock
+        - *services-dockerfile-rebuild
+
+  ingestion-service:
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./services/ingestion-service/app
+          target: /app/app
+          ignore:
+            - "**/__pycache__/**"
+            - "**/migrations/**"
+        - *shared-sync
+        - action: rebuild
+          path: ./services/ingestion-service/pyproject.toml
+        - action: rebuild
+          path: ./services/ingestion-service/uv.lock
+        - *services-dockerfile-rebuild
+
+  retrieval-service:
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./services/retrieval-service/app
+          target: /app/app
+          ignore:
+            - "**/__pycache__/**"
+            - "**/migrations/**"
+        - *shared-sync
+        - action: rebuild
+          path: ./services/retrieval-service/pyproject.toml
+        - action: rebuild
+          path: ./services/retrieval-service/uv.lock
+        - *services-dockerfile-rebuild
+
+  agent-orchestrator:
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./services/agent-orchestrator/app
+          target: /app/app
+          ignore:
+            - "**/__pycache__/**"
+            - "**/migrations/**"
+        - *shared-sync
+        - action: rebuild
+          path: ./services/agent-orchestrator/pyproject.toml
+        - action: rebuild
+          path: ./services/agent-orchestrator/uv.lock
+        - *services-dockerfile-rebuild
+
+  artifact-service:
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./services/artifact-service/app
+          target: /app/app
+          ignore:
+            - "**/__pycache__/**"
+            - "**/migrations/**"
+        - *shared-sync
+        - action: rebuild
+          path: ./services/artifact-service/pyproject.toml
+        - action: rebuild
+          path: ./services/artifact-service/uv.lock
+        - *services-dockerfile-rebuild
+
+  model-gateway:
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./services/model-gateway/app
+          target: /app/app
+          ignore:
+            - "**/__pycache__/**"
+            - "**/migrations/**"
+        - *shared-sync
+        - action: rebuild
+          path: ./services/model-gateway/pyproject.toml
+        - action: rebuild
+          path: ./services/model-gateway/uv.lock
+        - *services-dockerfile-rebuild
+
+  admin-service:
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./services/admin-service/app
+          target: /app/app
+          ignore:
+            - "**/__pycache__/**"
+            - "**/migrations/**"
+        - *shared-sync
+        - action: rebuild
+          path: ./services/admin-service/pyproject.toml
+        - action: rebuild
+          path: ./services/admin-service/uv.lock
+        - *services-dockerfile-rebuild
+
+  web:
+    develop:
+      watch:
+        - action: rebuild
+          path: ./apps/web/app
+        - action: rebuild
+          path: ./apps/web/public/aipollo
+        - action: rebuild
+          path: ./apps/web/public/fonts
+        - action: rebuild
+          path: ./apps/web/next.config.ts
+        - action: rebuild
+          path: ./apps/web/proxy.ts
+        - action: rebuild
+          path: ./apps/web/tsconfig.json
+        - action: rebuild
+          path: ./apps/web/package.json
+        - action: rebuild
+          path: ./apps/web/pnpm-lock.yaml
+        - action: rebuild
+          path: ./apps/web/Dockerfile

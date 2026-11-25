@@ -69,10 +69,11 @@ WORKSPACE_SEARCH = re.compile(rf"workspaces/{UUID_PATH}/search")
 DOCUMENT_LIST = re.compile(rf"workspaces/{UUID_PATH}/documents")
 DOCUMENT_PATHS = (
     (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}/annotations"), ("GET", "POST")),
-    (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}/annotations/{UUID_PATH}"), ("DELETE",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}/annotations/{UUID_PATH}"), ("PATCH", "DELETE")),
     (DOCUMENT_LIST, ("GET", "POST")),
     (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}"), ("GET", "PATCH", "DELETE")),
     (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}/jobs"), ("GET",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}/retry"), ("POST",)),
     (re.compile(rf"workspaces/{UUID_PATH}/documents/{UUID_PATH}/(?:original|preview)"), ("GET", "HEAD")),
 )
 MAX_BODY_BYTES = 16 * 1024
@@ -108,6 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         async with httpx.AsyncClient(
             timeout=4, trust_env=False, cookies=CookieJar(policy=RejectUpstreamCookies()),
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=3),
         ) as client:
             app.state.client = client
             yield
@@ -233,11 +235,19 @@ async def proxy(request: Request, path: str) -> Response:
             timeout = httpx.Timeout(15, connect=5)
         elif search or stream:
             timeout = httpx.Timeout(RuntimeBudgets.from_env().search_caller if search else 15, connect=5)
-        outbound = app.state.client.build_request(
-            method, f"{upstream}/v1/{path}", headers=headers, content=body,
-            timeout=timeout,
-        )
-        upstream_response = await app.state.client.send(outbound, stream=stream)
+        def build_outbound():
+            return app.state.client.build_request(
+                method, f"{upstream}/v1/{path}", headers=headers, content=body,
+                timeout=timeout,
+            )
+
+        try:
+            upstream_response = await app.state.client.send(build_outbound(), stream=stream)
+        except httpx.RemoteProtocolError:
+            if method not in ("GET", "HEAD"):
+                raise
+            # Retry once when Uvicorn closes a pooled HTTP/1.1 keep-alive connection mid-dispatch.
+            upstream_response = await app.state.client.send(build_outbound(), stream=stream)
     except httpx.HTTPError as exc:
         logging.getLogger(__name__).warning("Upstream transport failure request_id=%s service=%s error=%s",
                                             request_id(request), urlsplit(upstream).hostname, type(exc).__name__)

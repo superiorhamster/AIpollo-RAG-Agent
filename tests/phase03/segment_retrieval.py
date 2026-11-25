@@ -1,5 +1,6 @@
 """Verify stored citation maps cannot escape the active retrieval scope."""
 
+import json
 import unittest
 from uuid import uuid4
 
@@ -23,6 +24,8 @@ class SegmentRetrieval(unittest.IsolatedAsyncioTestCase):
                     "document_id": str(source), "index_generation": str(generation),
                 }])
             assert request.url.path.endswith("/embeddings")
+            self.assertEqual(json.loads(request.content)["input_type"], "query")
+            self.assertEqual(json.loads(request.content)["texts"], ["Evidence"])
             return httpx.Response(200, json={"vectors": [[1.0]]})
 
         payload = {"workspace_id": str(workspace), "document_id": str(source),

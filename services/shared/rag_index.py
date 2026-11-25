@@ -55,6 +55,7 @@ class EmbeddingConfig(BaseModel):
 class EmbeddingBatch(BaseModel):
     texts: list[Text] = Field(min_length=1, max_length=EMBED_BATCH)
     fingerprint: Fingerprint
+    input_type: Literal["document", "query"] = "document"
 
 
 class EmbeddingResult(BaseModel):

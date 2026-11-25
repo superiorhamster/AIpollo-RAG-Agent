@@ -128,7 +128,7 @@ test('real Vietnamese PDF indexing, scoped search, grounded Ask follow-up and ci
       await page.reload()
       await expect(citationMode).toHaveValue('chunk')
       const nav = page.getByRole('complementary', { name: 'Workspace navigation' })
-      await nav.getByRole('button', { name: 'Library', exact: true }).click()
+      await nav.getByRole('button', { name: 'Documents', exact: true }).click()
       await nav.getByRole('button', { name: 'Chats', exact: true }).click()
       await expect(citationMode).toHaveValue('chunk')
       await nav.getByRole('button', { name: 'History', exact: true }).click()

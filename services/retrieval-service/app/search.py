@@ -128,7 +128,7 @@ async def candidates(
         return SearchResult(evidence=[], indexed_documents=[])
     response = await client.post(
         model_path + "/embeddings", headers=model_headers, timeout=RuntimeBudgets.from_env().embedding_caller,
-        json={"texts": [data.query.strip()], "fingerprint": config.fingerprint},
+        json={"texts": [data.query.strip()], "fingerprint": config.fingerprint, "input_type": "query"},
     )
     response.raise_for_status()
     result = EmbeddingResult.model_validate_json(response.content)
