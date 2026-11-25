@@ -111,7 +111,7 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
             payload = json.loads(request.content)
             if request.url.host == "retrieval-service":
                 stages.append("retrieve")
-                self.assertEqual(payload, dict(query=standalone or question, document_ids=SOURCES, limit=6))
+                self.assertEqual(payload, dict(query=standalone or question, document_ids=SOURCES, limit=8))
                 return httpx.Response(200, json={"evidence": passages})
             self.assertEqual(request.url.host, "model-gateway")
             system, user = payload["messages"]
@@ -559,6 +559,27 @@ class HistoryAsk(unittest.IsolatedAsyncioTestCase):
             await worker.attribute(run, baseline, parents, 0, get_running_loop().time() + 40)
         self.assertEqual(refusal.exception.code, "cancelled")
         worker.complete.assert_not_awaited()
+
+    async def test_auto_uses_single_pass_for_moderate_segment_overhead(self):
+        from asyncio import get_running_loop
+
+        parent = passage("Moderate source", "A. " * 25 + "B.")
+        parent["citation_segments_v1"] = [
+            dict(id=str(uuid4()), ordinal=n, start=n * 3, end=n * 3 + 2,
+                 page=1, precision="page", rects=[])
+            for n in range(26)
+        ]
+        target_id = parent["citation_segments_v1"][0]["id"]
+        worker = Worker(self.database, None)
+        worker.citation_mode = "auto"
+        worker.current = AsyncMock()
+        worker.complete = AsyncMock(return_value=json.dumps({
+            "claims": [{"text": "A.", "source": "document", "evidence": [target_id]}],
+        }))
+        result = await worker.compose(self.new_run(Q1), [parent], [], 0,
+                                      deadline=get_running_loop().time() + 100)
+        self.assertEqual([call.args[1] for call in worker.complete.await_args_list], [PRIMARY_SEGMENT_SYSTEM])
+        self.assertEqual(result["claims"][0]["citations"][0]["segment_ids"], [target_id])
 
     async def test_repair_does_not_exceed_the_cost_budget(self):
         def upstream(request):

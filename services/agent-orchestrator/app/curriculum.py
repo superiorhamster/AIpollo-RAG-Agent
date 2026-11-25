@@ -154,7 +154,7 @@ class CurriculumWorker:
             """), {**self.keys(job), "cost": estimate, "budget": self.limits.budget})
         if reserved is None:
             raise StopRun("cost_limit")
-        response = await self.client.post("http://model-gateway:8000/internal/v1/completions", timeout=30,
+        response = await self.client.post("http://model-gateway:8000/internal/v1/completions", timeout=60,
             headers={"X-Model-Service-Token": os.environ["MODEL_CHAT_TOKEN"], "X-Request-ID": str(job["request_id"])},
             json={"messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
                   "max_tokens": self.limits.max_tokens})

@@ -43,12 +43,13 @@ def evaluate(base_url):
         config = client.get("/embedding-config").raise_for_status().json()
         started = time.perf_counter()
 
-        def embed(texts):
+        def embed(texts, input_type):
             vectors = []
-            size = 1 if os.environ.get("MODEL_EMBEDDING_PROTOCOL") == "ollama" else 16
+            size = 16
             for offset in range(0, len(texts), size):
                 batch = texts[offset:offset + size]
-                response = client.post("/embeddings", json={"texts": batch, "fingerprint": config["fingerprint"]})
+                response = client.post("/embeddings", json={"texts": batch, "fingerprint": config["fingerprint"],
+                                                          "input_type": input_type})
                 result = response.raise_for_status().json()["vectors"]
                 if (len(result) != len(batch) or any(len(v) != config["dimensions"] for v in result)
                         or any(not any(v) or not all(math.isfinite(x) for x in v) for v in result)):
@@ -56,13 +57,15 @@ def evaluate(base_url):
                 vectors.extend(result)
             return vectors
 
-        doc_vectors = embed([d["text"] for d in docs])
-        query_vectors = embed([q["query"] for q in queries])
+        doc_vectors = embed([d["text"] for d in docs], "document")
+        query_vectors = embed([q["query"] for q in queries], "query")
         elapsed = round((time.perf_counter() - started) * 1000, 1)
     baseline = metrics(docs, queries, [fixture_vector(d["text"], 64) for d in docs],
                        [fixture_vector(q["query"], 64) for q in queries])
     actual = metrics(docs, queries, doc_vectors, query_vectors)
     print(json.dumps({"corpus": corpus["version"], "queries": len(queries), "dimensions": config["dimensions"],
+                      "embedding_model": os.environ.get("MODEL_EMBEDDING_NAME"),
+                      "fingerprint": config["fingerprint"],
                       "fixture_baseline": baseline, "configured_model": actual, "embedding_elapsed_ms": elapsed,
                       "regressed_metrics": [key for key in actual if actual[key] < baseline[key]]}, indent=2))
 

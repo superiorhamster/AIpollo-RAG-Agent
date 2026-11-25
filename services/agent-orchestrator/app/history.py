@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 
 def input_limit() -> int:
-    return min(24_000, max(4096, int(os.environ.get("RUN_MAX_INPUT_BYTES", "14000"))))
+    return min(32_000, max(4096, int(os.environ.get("RUN_MAX_INPUT_BYTES", "20000"))))
 
 
 async def prior_history(connection: AsyncConnection, run: dict, max_input_bytes: int) -> list[dict[str, str]]:

@@ -26,8 +26,9 @@ Only the web client, gateway, and local infrastructure ports are published, all 
 
 | Command | Effect |
 | --- | --- |
-| `make compose-check` | Validate the resolved Compose configuration. |
-| `make up` | Rebuild and start the full stack after editing source. |
+| `make compose-check` | Validate the resolved Compose configuration (including `compose.watch.yaml`). |
+| `make up` | Rebuild, start the full stack, and attach Docker Compose Watch (`Ctrl+C` stops watching while containers stay up; pass `WATCH=0` for detached start). |
+| `make watch` | Reattach Docker Compose Watch to an already running dev stack without rebuilding. |
 | `make ps` / `make logs` | Inspect container status or follow logs. |
 | `make verify` | Check infrastructure health, application endpoints, and the web home page. |
 | `make verify-phase01` | Run the identity and workspace API, database, and Playwright checks in an isolated Compose project. |
@@ -55,7 +56,7 @@ The gateway serves the [Phase 01 OpenAPI contract](services/api-gateway/app/open
 
 When upgrading from opaque sessions, run `make bootstrap` and sign in again. The migration preserves accounts and workspace data. Retain `AUTH_JWT_SIGNING_KEY` in the local environment across restarts. For rollback, stop Web, Gateway, Workspace, and Auth, use the current Auth migration image to run `alembic -c app/alembic.ini downgrade identity_001`, then restore the previous application images and sign in again.
 
-The database provisioning job adds separate identity and workspace schemas to the existing PostgreSQL database. `make up` applies their Alembic migrations before starting dependent services. `make down` preserves data. Rolling application images back to Phase 00 preserves the new schemas. Keep generated `.env` credentials private and use separate secrets for deployments.
+The database provisioning job adds separate identity and workspace schemas to the existing PostgreSQL database. `make up` applies their Alembic migrations before starting dependent services. Docker Compose Watch excludes `migrations/` and does not reload `.env`, so re-run `make up` (or `make down && make up`) after adding Alembic migrations or editing `.env`. `make down` preserves data. Rolling application images back to Phase 00 preserves the new schemas. Keep generated `.env` credentials private and use separate secrets for deployments.
 
 ## Documents
 
@@ -79,60 +80,49 @@ For a local OpenAI-compatible endpoint on the Docker host, use http://host.docke
 
 Set MODEL_CHAT_BASE_URL, MODEL_CHAT_NAME, and MODEL_CHAT_API_KEY for the compatible chat endpoint. In **Chats**, choose sources in the sidebar and select Ask, Plan, or Agent in the composer. On a narrow screen, select sources directly in the composer. Accepting a plan saves approval for its current version. Use **Run accepted plan** to start it. Edit or regenerate to draft a new version. Only you can access your conversations, plans, and runs.
 
-### Local EmbeddingGemma in Compose
+### Gemini Embedding 2 in Compose
 
-The optional Ollama overlay uses `embeddinggemma-2:270m-q8_0-text` with **768 output
-dimensions**, verified against the downloaded model's embedding API. It runs the
-pinned Ollama 0.40.16 image on CPU. Its internal origin is
-`http://ollama:11434`; no Ollama host port is published. The overlay selects
-`MODEL_EMBEDDING_PROTOCOL=ollama`, using native `/api/embed` with an 8192-token
-context and four CPU threads, matching the downloaded model's working host profile.
-The default `openai` protocol remains available for compatible providers; its base
-URLs stop at `/v1`, because Model Gateway appends `/embeddings` itself.
-
-The Ollama healthcheck computes a synthetic embedding before allowing Model Gateway
-to start and keeps the model loaded. CPU cold start can exceed the gateway's normal
-25-second deadline; the readiness probe allows 180 seconds. The loaded model consumes
-memory even while idle. Metadata availability alone does not mark the model ready.
-
-Set `OLLAMA_MODELS_DIR` in your private `.env` to the absolute directory containing
-the existing Ollama `manifests/` and `blobs/` directories. On the current machine it
-is `/home/anhpd/Project/Group/RAG/.runtime/models`. The directory is mounted read-only;
-the image and model are separate downloads, and the overlay never pulls model weights.
-Update models through the host Ollama instance, then update the configured model
-revision and re-index. Keep model files outside Git.
+The Gemini overlay selects **`gemini-embedding-2`**, using Google's
+[OpenAI-compatible endpoint](https://ai.google.dev/gemini-api/docs/openai#embeddings)
+and **3072 output dimensions** by default. Add `GEMINI_API_KEY` to your existing
+private `.env`; do not commit the key. Set `GEMINI_EMBEDDING_DIMENSIONS=768` or
+`1536` there if you prefer a smaller vector. Keep your existing chat configuration.
 
 ```bash
-make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" compose-check
-make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" up
-make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" verify-embedding
-make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" eval-embedding
-make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" reindex-embeddings
-make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" reindex-embeddings APPLY=1
+make COMPOSE_FILES="compose.dev.yaml compose.gemini.yaml" compose-check
+make COMPOSE_FILES="compose.dev.yaml compose.gemini.yaml" up
+make COMPOSE_FILES="compose.dev.yaml compose.gemini.yaml" verify-embedding
+make COMPOSE_FILES="compose.dev.yaml compose.gemini.yaml" eval-embedding
+make COMPOSE_FILES="compose.dev.yaml compose.gemini.yaml" reindex-embeddings
+# Review the dry run before applying; this sends selected source text to Google.
+make COMPOSE_FILES="compose.dev.yaml compose.gemini.yaml" reindex-embeddings APPLY=1
 ```
 
-The overlay supplies embedding configuration and the placeholder API key `ollama`.
-Keep existing `MODEL_CHAT_*` values in `.env`. Use the same `COMPOSE_FILES` argument
-for `ps`, `logs`, `verify`, and `down`. Phase verification scripts continue using
-isolated fixture projects and do not require this model or its cache.
+Use this overlay with the same project and `.env`
+as your existing stack. It changes only Model Gateway's embedding configuration.
+The two verification commands above use synthetic Vietnamese/bilingual text;
+`eval-embedding` reports recall@3, MRR and top-1 versus a fixture baseline, rather
+than a full hybrid retrieval evaluation. A live key is required for these checks.
 
-Re-index defaults to a dry run across active workspaces. Add `WORKSPACE_ID=<uuid>` to
-limit it to one workspace. Applying it requeues eligible completed/failed index jobs,
-resets attempts and keeps old generation pointers until publication succeeds.
-Already current successful jobs, queued/running jobs, preview jobs and deleted
-sources are skipped. Wait for running jobs and rerun the command if they used the
-previous model. Check document jobs until the selected sources finish. The model,
-endpoint, dimensions and revision determine a new fingerprint; the Ollama protocol
-and CPU/context options also participate. Retrieval never mixes
-old vectors into the new collection. Searches can temporarily lack evidence while
-sources are rebuilding.
+Gateway sends the selected output dimension and applies Google's
+[retrieval input formats](https://ai.google.dev/gemini-api/docs/embeddings#task-types-embeddings-2):
+`task: search result | query: ...` for queries and `title: none | text: ...` for
+document passages. Canonical chunk text and citation boundaries stay unchanged.
+The internal embedding request adds optional `input_type` (`document` by default,
+or `query`); legacy providers retain their existing payloads. The Gemini-specific
+format revision participates in the embedding fingerprint, so old unformatted
+vectors cannot mix with the new query/document representations.
 
-To roll back, stop the overlay project while keeping volumes, restore the earlier
-embedding settings, start the base Compose project, and apply re-index again. Old
-collections and original documents are retained. `eval-embedding` reports local
-cosine retrieval metrics on the synthetic bilingual corpus and compares the fixture
-baseline. The Phase 03 evaluation separately checks live Qdrant hybrid ranking and
-tenant filters. Neither small corpus substitutes for production retrieval evaluation.
+Changing model, dimensions, or format requires reindexing existing sources, even
+if the previous model also used 768 dimensions. Reindexing creates a separate
+fingerprint-named collection and publishes each generation only when complete;
+old citation snapshots and collections are retained. To roll back, use your
+previous Compose selection and embedding configuration, then dry-run/apply reindex
+again for sources already published with Gemini. Search includes only sources
+published for the selected fingerprint; switching configuration alone does not
+make old vectors searchable with the new model. Multimodal uploads are
+not enabled by selecting this model: the current pipeline still embeds extracted
+text, one vector per chunk.
 
 ### Gemini embeddings return 502 `invalid_embedding`
 
@@ -165,8 +155,7 @@ with `Retry-After` and remain subject to bounded ingestion retries. OCR is disab
 scanned PDFs without a text layer report `no_text` and can still be previewed.
 
 `MODEL_EMBEDDING_TIMEOUT_SECONDS` defaults to 60 and embedding callers allow another
-15 seconds. The Ollama overlay embeds one passage per request to bound CPU batch
-latency; it retains the selected model, vector dimensions and provider fingerprint.
+15 seconds.
 Chat calls retain their separate 25-second client deadline. Search has an explicit
 overall budget with longer gateway/BFF deadlines. `INDEX_JOB_TIMEOUT_SECONDS`
 defaults to 1800 (lease plus 60), and `RUN_TIMEOUT_SECONDS` to 210 (lease plus 15).
@@ -179,9 +168,9 @@ queue without consuming an attempt or changing the published generation.
 After edits, rebuild/recreate with the same Compose overlay used to start the stack:
 
 ```bash
-make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" up
-make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" reindex-embeddings
-make COMPOSE_FILES="compose.dev.yaml compose.ollama.yaml" reindex-embeddings APPLY=1
+make up
+make reindex-embeddings
+make reindex-embeddings APPLY=1
 ```
 
 The first reindex command is a dry run. Add `WORKSPACE_ID=<uuid>` to scope recovery.
@@ -205,8 +194,7 @@ opening. No application databases or real model providers are used. Browser
 artifacts are retained under ignored `test-results/`. The real-provider PDF flow
 and Phase 01–03 suites remain separate verification gates.
 
-`make verify-local-rag` uses the configured real chat provider and local Ollama
-cache in a separate Compose project with independent databases and storage. It
+`make verify-local-rag` uses the configured real chat and embedding providers in a separate Compose project with independent databases and storage. It
 checks embedding/chat adapters and the bilingual retrieval corpus, generates a
 Vietnamese PDF, verifies indexing/search, asks a follow-up question,
 and opens the cited PDF page. Its own test data is removed afterwards. Run one
@@ -321,7 +309,7 @@ providers should leave it empty. See the [response format API contract](https://
 Start the normal development stack, then run:
 
 ```bash
-make COMPOSE_FILES='compose.dev.yaml compose.ollama.yaml' verify-smoke
+make verify-smoke
 ```
 
 This Linux Docker browser runner reads `WEB_ORIGIN` from the running web container

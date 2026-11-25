@@ -1,0 +1,12 @@
+# Opt in with make COMPOSE_FILES="compose.dev.yaml compose.gemini.yaml" up.
+# Keep the existing .env and Compose project; do not combine with the Ollama overlay.
+services:
+  model-gateway:
+    environment:
+      MODEL_PROVIDER: openai-compatible
+      MODEL_EMBEDDING_BASE_URL: https://generativelanguage.googleapis.com/v1beta/openai
+      MODEL_EMBEDDING_PROTOCOL: openai
+      MODEL_EMBEDDING_NAME: gemini-embedding-2
+      MODEL_EMBEDDING_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY in your private .env}
+      MODEL_EMBEDDING_DIMENSIONS: ${GEMINI_EMBEDDING_DIMENSIONS:-3072}
+      MODEL_EMBEDDING_REVISION: "1"
