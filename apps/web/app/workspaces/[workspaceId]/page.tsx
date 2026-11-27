@@ -24,7 +24,7 @@ export default async function WorkspaceDocuments({ params, searchParams }: Conte
       signedInRequest<Workspace[]>('/v1/workspaces', returnTo),
       signedInRequest<Account>('/v1/auth/me', returnTo),
     ])
-    return <DocumentShelf key={returnTo} workspace={workspace} workspaces={workspaces} email={account.email}
+    return <DocumentShelf key={returnTo} workspace={workspace} workspaces={workspaces} email={account.email} accountId={account.user_id}
       items={items} selected={selected} initialPage={initialPage} initialView={initialView} />
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) notFound()

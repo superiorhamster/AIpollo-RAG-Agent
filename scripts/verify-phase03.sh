@@ -38,11 +38,10 @@ run_check() {
 "${compose[@]}" run --rm --no-deps -T document-parser python - < tests/phase03/parser.py
 "${compose[@]}" run --rm --no-deps -T document-parser python - < tests/phase03/parser_lifecycle.py
 "${compose[@]}" stop agent-orchestrator
+# Legacy workflow and curriculum execution are archival. The Retry suite
+# below verifies the active route and worker fences.
 "${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \
-  agent-orchestrator python /tests/phase05/workflows.py
-
-"${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \
-  agent-orchestrator python /tests/phase05/curriculum.py
+  agent-orchestrator python /tests/phase05/learning_plan_api.py
 "${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \
   agent-orchestrator python /tests/phase05/research.py
 "${compose[@]}" run --rm --no-deps -T -e PYTHONPATH=/app:/app/shared -v "$PWD/tests:/tests:ro" \

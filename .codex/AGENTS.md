@@ -27,11 +27,13 @@ If a task conflicts with these documents, stop and report the conflict instead o
    - Never rely on frontend hiding as authorization.
 
 2. **Interaction modes are separate from academic capabilities**
-   - Interaction modes: `ASK`, `PLAN`, `AGENT`.
+   - Active interaction modes: `ASK` and `AGENT`. Legacy `PLAN` records are retained for history.
    - Academic capabilities: `LEARN`, `RESEARCH`, `WRITE`.
    - A request may combine one interaction mode with one academic capability.
 
-3. **Product Plan mode (`LEARN-02` / `/plan`) is approval-gated**
+3. **Legacy Plan execution (`LEARN-02`) is isolated**
+   - Keep legacy execution routes, submission and worker dispatch inactive. Preserve legacy data and historical artifacts.
+   - The Learning Plan redesign uses `/plan` to create a private learning blueprint and `/edit-plan` to propose changes. Only acceptance of a current proposal mutates an existing Plan through conversational Edit. The archived execution contract below applies to legacy records and code.
    - The plan shown to the user is a concise, inspectable action plan, not hidden chain-of-thought.
    - Plan generation may perform read-only inspection/retrieval needed to prepare the plan.
    - It must not execute the planned mutating or externally consequential actions.
@@ -124,7 +126,7 @@ For RAG changes, do not rely only on example prompts. Preserve or update evaluat
 
 ## Product Plan-mode test invariants
 
-Any change touching `/plan` or agent execution must prove at least these invariants:
+Tests for the archived legacy execution contract must account for these invariants. Active regression tests must verify that archived Plans cannot be created or executed through the current app:
 
 1. A draft/unaccepted plan cannot execute.
 2. Accepted plan version N can execute only version N.

@@ -1,8 +1,8 @@
 export const identifier = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i
 
-export type WorkspaceView = 'chats' | 'library' | 'notes' | 'plans' | 'artifacts' | 'references' | 'history'
+export type WorkspaceView = 'chats' | 'library' | 'notes' | 'plans' | 'learning-plans' | 'artifacts' | 'references' | 'history'
 
-const validViews = new Set<WorkspaceView>(['chats', 'library', 'notes', 'plans', 'artifacts', 'references', 'history'])
+const validViews = new Set<WorkspaceView>(['chats', 'library', 'notes', 'plans', 'learning-plans', 'artifacts', 'references', 'history'])
 
 export function parseWorkspaceView(value?: string | string[] | null): WorkspaceView | undefined {
   if (typeof value !== 'string') return undefined

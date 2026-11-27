@@ -57,13 +57,16 @@ WORKSPACE_PATHS = (
     (re.compile(rf"workspaces/{UUID_PATH}/members/{UUID_PATH}"), ("PUT", "DELETE")),
 )
 INTERACTION_PATHS = (
+    (re.compile(rf"workspaces/{UUID_PATH}/learning-plans"), ("GET", "POST")),
+    (re.compile(rf"workspaces/{UUID_PATH}/learning-plans/{UUID_PATH}"), ("GET", "PUT", "DELETE")),
+    (re.compile(rf"workspaces/{UUID_PATH}/learning-cards/{UUID_PATH}"), ("GET", "PUT")),
     (re.compile(rf"workspaces/{UUID_PATH}/workflow-features"), ("GET",)),
-    (re.compile(rf"workspaces/{UUID_PATH}/(?:plans|runs)"), ("POST",)),
-    (re.compile(rf"workspaces/{UUID_PATH}/plans/{UUID_PATH}"), ("GET", "PATCH")),
-    (re.compile(rf"workspaces/{UUID_PATH}/plans/{UUID_PATH}/(?:accept|regenerate|cancel)"), ("POST",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/runs"), ("POST",)),
     (re.compile(rf"workspaces/{UUID_PATH}/runs/{UUID_PATH}/cancel"), ("POST",)),
     (re.compile(rf"workspaces/{UUID_PATH}/runs/{UUID_PATH}(?:/events|/steps)?"), ("GET",)),
-    (re.compile(rf"workspaces/{UUID_PATH}/conversations(?:/{UUID_PATH})?"), ("GET",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/conversations"), ("GET", "POST")),
+    (re.compile(rf"workspaces/{UUID_PATH}/conversations/{UUID_PATH}"), ("GET",)),
+    (re.compile(rf"workspaces/{UUID_PATH}/conversations/{UUID_PATH}/learning-plan"), ("GET", "PUT")),
 )
 WORKSPACE_SEARCH = re.compile(rf"workspaces/{UUID_PATH}/search")
 DOCUMENT_LIST = re.compile(rf"workspaces/{UUID_PATH}/documents")

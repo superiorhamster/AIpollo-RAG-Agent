@@ -9,6 +9,7 @@ export default defineConfig({
   use: {
     baseURL,
     browserName: 'chromium',
+    channel: process.env.UI_TEST_BROWSER_CHANNEL,
     actionTimeout: 8000,
     navigationTimeout: 15000,
     screenshot: 'only-on-failure',

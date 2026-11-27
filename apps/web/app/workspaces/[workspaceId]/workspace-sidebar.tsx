@@ -25,7 +25,7 @@ export const WORKSPACE_VIEWS: {
   { id: 'chats', label: 'Chats', vietnamese: 'Trò chuyện', icon: 'chats', activeIcon: 'chats-active' },
   { id: 'library', label: 'Documents', vietnamese: 'Tài liệu', icon: 'library', activeIcon: 'library-active' },
   { id: 'notes', label: 'Notes', vietnamese: 'Ghi chú', icon: 'notes' },
-  { id: 'plans', label: 'Plans', vietnamese: 'Kế hoạch', icon: 'plan' },
+  { id: 'learning-plans', label: 'Learning Plans', vietnamese: 'Kế hoạch học tập', icon: 'plan' },
   { id: 'artifacts', label: 'Artifacts', vietnamese: 'Sản phẩm', icon: 'artifacts', activeIcon: 'artifacts-active' },
   { id: 'references', label: 'References', vietnamese: 'Tài liệu tham khảo', icon: 'references' },
   { id: 'history', label: 'History', vietnamese: 'Lịch sử', icon: 'history' },
@@ -52,6 +52,9 @@ export function WorkspaceSidebar({
   workspace,
   workspaces,
   mayWrite,
+  learningPlans,
+  onLearningPlanSlot,
+  mobileOpen,
   view,
   documents,
   selectedId,
@@ -67,6 +70,9 @@ export function WorkspaceSidebar({
   workspace: Workspace
   workspaces: Workspace[]
   mayWrite: boolean
+  learningPlans: boolean
+  onLearningPlanSlot: (node: HTMLDivElement | null) => void
+  mobileOpen: boolean
   view: WorkspaceView
   documents: SidebarDocument[]
   selectedId?: string
@@ -79,6 +85,7 @@ export function WorkspaceSidebar({
   onOpenDocument: (documentId: string) => void
 }) {
   const { text } = useWorkspaceLanguage()
+  const [plansExpanded, setPlansExpanded] = useState(true)
   // Current workspace starts expanded; other workspaces start collapsed.
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => ({
     [workspace.workspace_id]: true,
@@ -107,7 +114,8 @@ export function WorkspaceSidebar({
     : [workspace, ...workspaces]
 
   return (
-    <aside ref={sidebarRef} className="workspace-sidebar" aria-label="Workspace navigation">
+    <aside ref={sidebarRef} id="workspace-navigation" className="workspace-sidebar" aria-label="Workspace navigation"
+      data-mobile-open={mobileOpen}>
       {mayWrite && (
         <button className="workspace-upload" type="button" onClick={onUpload} title={text('Upload source', 'Tải tài liệu lên')}>
           <DesignIcon name="upload" />
@@ -155,11 +163,11 @@ export function WorkspaceSidebar({
               {isExpanded && (
                 <div id={branchId} className="workspace-tree-children">
                   <nav className="workspace-nav" aria-label={isCurrent ? 'Workspace sections' : item.name}>
-                    {WORKSPACE_VIEWS.map(section => {
+                    {WORKSPACE_VIEWS.filter(section => section.id !== 'learning-plans' || learningPlans).map(section => {
                       const label = text(section.label, section.vietnamese)
                       if (isCurrent) {
                         const active = view === section.id
-                        return (
+                        const navigation = (
                           <button
                             className="workspace-nav-item"
                             key={section.id}
@@ -172,6 +180,20 @@ export function WorkspaceSidebar({
                             <span className="sidebar-ellipsis">{label}</span>
                           </button>
                         )
+                        if (section.id !== 'learning-plans') return navigation
+                        return <div key={section.id}>
+                          <div className="workspace-plan-nav">
+                            {navigation}
+                            <button type="button" className="workspace-tree-toggle"
+                              aria-expanded={plansExpanded} aria-controls="workspace-plan-options"
+                              aria-label={plansExpanded ? text('Collapse chat plan choices', 'Thu gọn lựa chọn kế hoạch')
+                                : text('Expand chat plan choices', 'Mở lựa chọn kế hoạch')}
+                              onClick={() => setPlansExpanded(value => !value)}>
+                              {plansExpanded ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+                            </button>
+                          </div>
+                          <div id="workspace-plan-options" hidden={!plansExpanded} ref={onLearningPlanSlot} />
+                        </div>
                       }
                       return (
                         <Link

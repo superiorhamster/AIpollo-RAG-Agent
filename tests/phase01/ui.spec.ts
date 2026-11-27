@@ -18,6 +18,64 @@ class WorkspacePage {
   }
 }
 
+test('manual Learning Plan management works without opening a chat', async ({ page }, testInfo) => {
+  let saved: { plan_id: string; state_revision: number; blueprint: object } | undefined
+  const identifier = '19191919-1919-4919-8919-191919191919'
+  await page.route('**/workflow-features', route => route.fulfill({ json: { learning_plans: true } }))
+  await page.route('**/learning-plans**', async route => {
+    const request = route.request()
+    const method = request.method()
+    if (method === 'GET') return route.fulfill({ json: saved ? [saved] : [] })
+    if (method === 'DELETE') {
+      expect(request.postDataJSON()).toEqual({ revision: saved?.state_revision })
+      saved = undefined
+      return route.fulfill({ status: 204 })
+    }
+    const data = request.postDataJSON()
+    if (method === 'PUT') expect(data.revision).toBe(saved?.state_revision)
+    const blueprint = method === 'POST' ? data : data.blueprint
+    saved = {
+      plan_id: identifier, state_revision: (saved?.state_revision ?? 0) + 1,
+      blueprint: {
+        ...blueprint, objectives: blueprint.objectives.map((item: object) => ({ id: identifier, ...item })),
+      },
+    }
+    return route.fulfill({ status: method === 'POST' ? 201 : 200, json: saved })
+  })
+  const providerActions: string[] = []
+  page.on('request', request => {
+    if (request.method() === 'POST' && /\/runs$/.test(request.url())) providerActions.push(request.url())
+  })
+  await new WorkspacePage(page).open()
+  await page.getByRole('button', { name: 'Learning Plans', exact: true }).filter({ visible: true }).first().click()
+  const manager = page.getByRole('region', { name: 'Learning Plans' })
+  await expect(manager.getByText('No Learning Plans yet.')).toBeVisible()
+  await manager.getByRole('button', { name: 'New manual plan' }).click()
+  await manager.getByLabel('Plan name').fill('Compare fractions')
+  await manager.getByLabel('Learning goal').fill('Find a common denominator')
+  await manager.getByRole('button', { name: 'Add activity' }).click()
+  await manager.getByLabel('Activity 1').fill('Draw fraction bars')
+  await manager.getByRole('button', { name: 'Save plan' }).click()
+  await expect(manager.getByRole('button', { name: 'Compare fractions' })).toBeVisible()
+  await manager.getByRole('button', { name: 'Edit plan' }).click()
+  await manager.getByRole('checkbox', { name: 'Completed' }).check()
+  await manager.getByRole('button', { name: 'Save plan' }).click()
+  await expect(manager.getByText('1/1 complete')).toBeVisible()
+  await page.reload()
+  await page.getByRole('button', { name: 'Learning Plans', exact: true }).filter({ visible: true }).first().click()
+  await manager.getByRole('button', { name: 'Compare fractions' }).click()
+  await manager.getByRole('button', { name: 'Edit plan' }).click()
+  await expect(manager.getByRole('checkbox', { name: 'Completed' })).toBeChecked()
+  await page.screenshot({ path: testInfo.outputPath('learning-plans-desktop.png') })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(manager.getByRole('textbox', { name: 'Plan name' })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('learning-plans-mobile.png') })
+  await manager.getByRole('button', { name: 'Delete plan' }).click()
+  await manager.getByRole('button', { name: 'Confirm deletion' }).click()
+  await expect(manager.getByText('No Learning Plans yet.')).toBeVisible()
+  expect(providerActions).toEqual([])
+})
+
 test.beforeAll(async ({ browser, request }) => {
   const page = await browser.newPage()
   await page.setContent('<style>section{break-after:page;height:600px}</style><section>Page one</section><section>Page two: B4-201<br>Academic citation evidence line two<br>Nhắc lại: đọc kỹ tài liệu và trích dẫn.</section><section>Page three</section>')

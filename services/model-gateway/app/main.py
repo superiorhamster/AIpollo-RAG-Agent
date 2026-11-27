@@ -228,6 +228,7 @@ class CompletionOutput(BaseModel):
     text: str = Field(min_length=1, max_length=32_000)
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+    finish_reason: Literal["stop", "length", "tool_calls", "content_filter", "function_call", "unknown"] | None = None
 
 
 def _unsupported_optional_param(response: httpx.Response, body: dict[str, object]) -> str | None:
@@ -254,6 +255,36 @@ def _unsupported_optional_param(response: httpx.Response, body: dict[str, object
     return None
 
 
+def fixture_learning_response(payload: dict, tokens: int) -> dict:
+    plan = payload["current_plan"]
+    if "duration" in payload:
+        days = payload["duration"] if isinstance(payload["duration"], int) else 1
+        return {"reply": "Review the learning goals by day.", "plan": {
+            "title": "Fixture learning plan", "days": days, "objectives": [
+                {"day": day, "goal": f"Review the concept on day {day}", "activities": ["Write a short explanation."]}
+                for day in range(1, days + 1)
+            ],
+        }}
+    if tokens == 4096:
+        proposal = {key: value for key, value in plan.items() if key != "version"}
+        return {"reply": "Proposed title update.", "plan": {**proposal, "title": "Updated fixture learning plan"}}
+    evidence = payload["evidence"]
+    if evidence:
+        claim = {"text": evidence[0]["text"], "source": "document", "evidence": [evidence[0]["id"]]}
+    elif plan:
+        claim = {"text": plan["title"], "source": "plan", "evidence": []}
+    elif payload["source_state"] == "zero":
+        claim = {"text": "List the concepts you want to review.", "source": "general", "evidence": []}
+    else:
+        claim = None
+    pending = next((item for item in plan["objectives"] if item["progress"] == "pending"), None) if plan else None
+    suggestion = pending["id"] if pending and payload["query"] == "I completed my first objective." else None
+    return {
+        "claims": [claim] if claim is not None else [], "unsupported_parts": [],
+        "suggestion": suggestion, "readiness": "ready" if suggestion else "not_assessed",
+    }
+
+
 @app.post("/internal/v1/completions")
 async def completion(data: CompletionInput, request: Request) -> CompletionOutput:
     require_service(request, "X-Model-Service-Token", os.environ["MODEL_CHAT_TOKEN"])
@@ -261,6 +292,11 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
         payload = json.loads(data.messages[-1].content)
         if "question" in payload and "history" in payload and "evidence" not in payload:
             return CompletionOutput(text=json.dumps({"query": payload["question"]}))
+        if "plan_topics" in payload and "evidence" not in payload:
+            return CompletionOutput(text=json.dumps({"query": payload["query"]}))
+        if "source_state" in payload:
+            fixture = fixture_learning_response(payload, data.max_tokens)
+            return CompletionOutput(text=json.dumps(fixture))
         if "targets" in payload and "parents" in payload:
             return CompletionOutput(text=json.dumps({"attributions": [
                 {"target": row["target"], "segment_ids": [payload["parents"][row["parent"]][0]["id"]]}
@@ -322,9 +358,9 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
         usage = result.get("usage") or {}
         choice = result["choices"][0]
         content = choice["message"]["content"]
+        finish = choice.get("finish_reason")
+        finish = finish if isinstance(finish, str) and finish in {"stop", "length", "tool_calls", "content_filter", "function_call"} else "unknown"
         if not isinstance(content, str) or not content.strip():
-            finish = choice.get("finish_reason")
-            finish = finish if isinstance(finish, str) and finish in {"stop", "length", "tool_calls", "content_filter", "function_call"} else "unknown"
             output_tokens = usage.get("completion_tokens")
             details = usage.get("completion_tokens_details")
             reasoning_tokens = details.get("reasoning_tokens") if isinstance(details, dict) else None
@@ -334,7 +370,8 @@ async def completion(data: CompletionInput, request: Request) -> CompletionOutpu
             raise ValueError("Provider returned no text")
         return CompletionOutput(text=content,
                                 input_tokens=usage.get("prompt_tokens"),
-                                output_tokens=usage.get("completion_tokens"))
+                                output_tokens=usage.get("completion_tokens"),
+                                finish_reason=finish)
     except (httpx.HTTPError, TimeoutError, ValueError, KeyError, IndexError, ValidationError) as exc:
         if response is not None and response.is_error:
             # Error messages can echo prompts. Log only allowlisted machine-readable fields.

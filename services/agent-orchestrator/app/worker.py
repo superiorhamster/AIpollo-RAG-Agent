@@ -1,6 +1,7 @@
 """A bounded worker for retrieval and grounded response generation."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -12,12 +13,15 @@ from sqlalchemy import text
 from pydantic import ValidationError
 
 from rag_runtime import RuntimeBudgets
+from rag_http import ApiError
 from rag_telemetry import operation
 from .generation import REPAIR, json_output
 from .ask_prompts import ANSWER_SYSTEM, ATTRIBUTION_SYSTEM, PRIMARY_SEGMENT_SYSTEM, REWRITE_SYSTEM
 from .citations import attributed, attribution_input, encode, labels, resolve
-from .history import input_limit, prior_history
-from .types import FIELD_KEYS, AskClaim, CandidateAnswer, GeneratedAskAnswer, SearchRewrite, PlanDefinition, GeneratedTutorAnswer
+from .history import input_limit, ordinary_learning_history, prior_history
+from .learning_ai import REPAIR as LEARNING_REPAIR, pack as pack_learning, rewrite_context, validate as validate_learning
+from .learning_store import create_learning_plan, read_learning_plan, store_card
+from .types import FIELD_KEYS, AskClaim, CandidateAnswer, GeneratedAskAnswer, SearchRewrite, PlanDefinition, GeneratedTutorAnswer, Objective
 
 LOG = logging.getLogger(__name__)
 CITATION_LOG = logging.getLogger("uvicorn.error")
@@ -88,17 +92,14 @@ class Worker:
             await connection.execute(text("""
                 UPDATE orchestration.runs SET status='failed', error_code='worker_interrupted',
                     lease_id=NULL, lease_until=NULL, updated_at=now()
-                WHERE status='running' AND lease_until < now()
-                  AND (attempts >= :attempts OR (step = 'compose' AND COALESCE(input->>'research_workflow','')<>'v1' AND COALESCE(input->>'verified_writing','')<>'v1' AND COALESCE(input->>'defense_workflow','')<>'v1' AND NOT EXISTS (
-                      SELECT 1 FROM orchestration.plan_versions v
-                      WHERE v.plan_id=orchestration.runs.plan_id AND v.version=orchestration.runs.plan_version
-                        AND v.workflow IS NOT NULL
-                  )))
+                WHERE interaction IN ('ASK', 'AGENT') AND status='running' AND lease_until < now()
+                  AND (attempts >= :attempts OR (step = 'compose' AND COALESCE(input->>'research_workflow','')<>'v1' AND COALESCE(input->>'verified_writing','')<>'v1' AND COALESCE(input->>'defense_workflow','')<>'v1'))
             """), {"attempts": self.max_attempts})
             rows = await connection.execute(text("""
                 WITH candidate AS (
                     SELECT run_id FROM orchestration.runs
-                    WHERE status='queued' OR (status='running' AND lease_until < now())
+                    WHERE interaction IN ('ASK', 'AGENT')
+                      AND (status='queued' OR (status='running' AND lease_until < now()))
                     ORDER BY created_at, run_id LIMIT 1 FOR UPDATE SKIP LOCKED
                 )
                 UPDATE orchestration.runs AS run SET status='running', lease_id=:lease,
@@ -106,8 +107,7 @@ class Worker:
                     lease_until=now() + make_interval(secs => :ttl), attempts=attempts+1,
                     step='retrieve', updated_at=now()
                 FROM candidate WHERE run.run_id=candidate.run_id
-                RETURNING run.*, (SELECT v.workflow FROM orchestration.plan_versions v
-                    WHERE v.plan_id=run.plan_id AND v.version=run.plan_version) AS workflow
+                RETURNING run.*
             """), {"lease": uuid4(), "ttl": self.timeout + 15})
             return rows.mappings().one_or_none()
 
@@ -127,7 +127,11 @@ class Worker:
         if run["interaction"] != "ASK" or run["conversation_id"] is None:
             return []
         if run.get("history_snapshot") is not None:
-            return run["history_snapshot"]
+            history = run["history_snapshot"]
+            if not history or not run["input"].get("learning"):
+                return history
+            async with self.database.connect() as connection:
+                return await ordinary_learning_history(connection, run, history)
         async with self.database.begin() as connection:
             row = await connection.execute(text("""
                 SELECT history_snapshot FROM orchestration.runs
@@ -145,7 +149,7 @@ class Worker:
                     WHERE run_id=:run AND lease_id=:lease AND status='running'
                 """), {"run": run["run_id"], "lease": run["lease_id"],
                        "history": json.dumps(history, ensure_ascii=False)})
-        return history
+            return await ordinary_learning_history(connection, run, history)
 
     def ask_citation_path(self, run):
         if run["interaction"] != "ASK" or run["input"].get("task", "answer") != "answer":
@@ -199,7 +203,10 @@ class Worker:
             LOG.warning("Ask completion unavailable request_id=%s status=503", run["request_id"])
             raise StopRun(ASK_COMPLETION_UNAVAILABLE)
         response.raise_for_status()
-        output = response.json()["text"]
+        completion = response.json()
+        if run["input"].get("learning") and tokens >= 2048 and completion.get("finish_reason") == "length":
+            raise StopRun("learning_output_capacity")
+        output = completion["text"]
         if not isinstance(output, str):
             raise ValueError("Completion text must be a string")
         output = output.strip()
@@ -212,13 +219,17 @@ class Worker:
         if not history:
             return original, 0
         content = json.dumps({"question": original, "history": history}, ensure_ascii=False)
+        system = REWRITE_SYSTEM
+        if run["input"].get("learning"):
+            system, content = rewrite_context(run, history)
+            self.log_learning_prompt(run, "rewrite", system, content)
         tokens = min(self.max_tokens, 512)
-        cost = self.estimate_cost(REWRITE_SYSTEM, content, tokens)
-        if len((REWRITE_SYSTEM + content).encode()) > self.max_input_bytes or not self.allows_cost(cost):
+        cost = self.estimate_cost(system, content, tokens)
+        if len((system + content).encode()) > self.max_input_bytes or not self.allows_cost(cost):
             return original, 0
         try:
             async with asyncio.timeout(12):
-                output = await self.complete(run, REWRITE_SYSTEM, content, tokens)
+                output = await self.complete(run, system, content, tokens)
             query = SearchRewrite.model_validate_json(output).query
             if not query.isprintable() or not any(char.isalnum() for char in query):
                 raise ValueError("Rewrite is not a usable search query")
@@ -245,12 +256,100 @@ class Worker:
             async with asyncio.timeout(seconds):
                 output = await self.complete(run, ATTRIBUTION_SYSTEM, content, tokens, retry_on_unavailable=True)
                 resolved = attributed(claims, output, lookup)
+        except StopRun as exc:
+            if exc.code != ASK_COMPLETION_UNAVAILABLE:
+                raise
+            return claims
         except (TimeoutError, ValueError, httpx.HTTPError, KeyError, TypeError) as exc:
             CITATION_LOG.info("Ask attribution fallback request_id=%s error=%s", run["request_id"], type(exc).__name__)
             return claims
         CITATION_LOG.info("Ask attribution request_id=%s targets=%d anchors=%d", run["request_id"], len(lookup),
                  sum(bool(c["segment_ids"]) for claim in resolved for c in claim["citations"]))
         return resolved
+
+    async def learning_context_current(self, run):
+        binding = run["input"]["learning"]
+        if os.environ.get("LEARNING_PLANS_ENABLED") != "true":
+            raise StopRun("learning_plans_disabled")
+        if binding["plan"] is None:
+            return
+        plan = binding["plan"]
+        async with self.database.connect() as connection:
+            try:
+                latest = await read_learning_plan(connection, {
+                    "workspace": run["workspace_id"], "owner": run["user_id"], "plan": plan["plan_id"],
+                })
+            except ApiError as exc:
+                raise StopRun("learning_plan_unavailable") from exc
+        if binding["action"] == "edit" and latest["state_revision"] != plan["state_revision"]:
+            raise StopRun("stale_learning_plan")
+
+    def log_learning_prompt(self, run, task, system, content):
+        CITATION_LOG.info("Learning prompt request_id=%s task=%s system_sha256=%s system_bytes=%d input_bytes=%d",
+                          run["request_id"], task, hashlib.sha256(system.encode("utf-8")).hexdigest(),
+                          len(system.encode("utf-8")), len(content.encode("utf-8")))
+
+    async def compose_learning(self, run, evidence, history, rewrite_cost, deadline):
+        if self.max_steps < 2:
+            raise StopRun("step_limit")
+        try:
+            task, system, content, labels, state, tokens = pack_learning(run, evidence, history)
+        except ValueError as exc:
+            raise StopRun("learning_input_capacity") from exc
+        spent = rewrite_cost
+        async with self.database.begin() as connection:
+            changed = await connection.execute(text("""
+                UPDATE orchestration.runs SET step='compose', updated_at=now()
+                WHERE run_id=:run AND lease_id=:lease AND status='running'
+            """), {"run": run["run_id"], "lease": run["lease_id"]})
+            if changed.rowcount != 1:
+                raise StopRun("cancelled")
+        for attempt in range(2):
+            instructions = system + (LEARNING_REPAIR if attempt else "")
+            spent += self.estimate_cost(instructions, content, tokens)
+            if not self.allows_cost(spent):
+                raise StopRun("cost_limit")
+            await self.current(run)
+            await self.learning_context_current(run)
+            self.log_learning_prompt(run, task, instructions, content)
+            output = await self.complete(run, instructions, content, tokens, retry_on_unavailable=True)
+            try:
+                claims, unsupported, action = validate_learning(task, output, labels, state, run["input"]["learning"])
+                break
+            except ValueError as exc:
+                errors = (
+                    sorted({entry["type"] for entry in exc.errors(include_input=False, include_url=False)})
+                    if isinstance(exc, ValidationError) else [type(exc).__name__]
+                )
+                CITATION_LOG.info("Learning output rejected request_id=%s task=%s attempt=%d types=%s",
+                                  run["request_id"], task, attempt + 1, errors)
+                if attempt == 1:
+                    raise StopRun("invalid_model_output") from exc
+        path = self.ask_citation_path(run)
+        if claims and path in {"auto", "single", "two"}:
+            claims = await self.attribute(run, claims, {item["chunk_id"]: item for item in evidence}, spent, deadline)
+        precision = "segment" if any(c.get("segment_ids") for claim in claims for c in claim["citations"]) else "chunk"
+        return {"claims": claims, "insufficient_evidence": not claims and action is None, "source_state": state,
+                "unsupported_parts": unsupported, "effective_citation_mode": precision}, action
+
+    async def publish_learning_action(self, connection, run, action, result):
+        kind, payload = action
+        binding = run["input"]["learning"]
+        keys = {"workspace": run["workspace_id"], "owner": run["user_id"], "conversation": run["conversation_id"]}
+        if kind == "create":
+            plan = await create_learning_plan(connection, keys["workspace"], keys["owner"], run["run_id"], payload["draft"])
+            await connection.execute(text("""
+                UPDATE orchestration.conversations
+                SET selected_learning_plan_id=:plan, selection_revision=selection_revision+1
+                WHERE workspace_id=:workspace AND user_id=:owner AND conversation_id=:conversation
+                  AND selection_revision=:revision
+            """), {**keys, "plan": plan["plan_id"], "revision": binding["selection_revision"]})
+            result["learning_plan_id"] = str(plan["plan_id"])
+            result["learning_reply"] = payload["reply"]
+        else:
+            keys["plan"] = binding["plan"]["plan_id"]
+            card = await store_card(connection, keys, binding["plan"]["state_revision"], kind, payload)
+            result["learning_card"] = str(card)
 
     async def compose(self, run, evidence, history, rewrite_cost, *, deadline=None):
         if self.max_steps < 2:
@@ -556,6 +655,7 @@ class Worker:
     async def execute(self, run):
         self.execution_cost = run.get("cost_reserved", 0)
         completed = None
+        learning_action = None
         stage = "history"
         timeout = self.timeout
         if (run.get("workflow") or self.bounded_generation(run)) and run.get("execution_started_at"):
@@ -566,11 +666,12 @@ class Worker:
             self.deadline = deadline
             async with asyncio.timeout_at(deadline):
                 await self.current(run)
+                learning = run["input"].get("learning")
+                if learning:
+                    await self.learning_context_current(run)
                 if run["input"].get("defense_workflow") == "v1":
                     from .defense import defend
                     completed = await defend(self, run)
-                elif run.get("workflow"):
-                    completed = await self.execute_workflow(run)
                 elif run["input"].get("verified_writing") == "v1":
                     from .writing import CitedDraft
                     completed = await CitedDraft(self, run).execute(require_comparison=False)
@@ -580,7 +681,8 @@ class Worker:
                 else:
                     history = await self.load_history(run)
                     stage = "rewrite"
-                    query, rewrite_cost = await self.retrieval_query(run, history)
+                    has_sources = bool(run["input"]["document_ids"])
+                    query, rewrite_cost = await self.retrieval_query(run, history) if has_sources else (run["input"]["query"], 0)
                     if history:
                         await self.current(run)
                     stage = "retrieve"
@@ -592,16 +694,26 @@ class Worker:
                         json={"query": query, "document_ids": run["input"]["document_ids"], "limit": 8,
                               **({"include_segments": True}
                                  if self.ask_citation_path(run) in {"auto", "single", "two"} else {})},
-                    )
-                    if response.status_code == 404:
+                    ) if has_sources else None
+                    if response is not None and response.status_code == 404:
                         raise StopRun("source_unavailable")
-                    response.raise_for_status()
-                    evidence = response.json()["evidence"]
+                    if response is not None:
+                        response.raise_for_status()
+                    evidence = response.json()["evidence"] if response is not None else []
                     stage = "compose"
                     can_recall = history and run["input"].get("task", "answer") in {"answer", "socratic_tutor"}
-                    completed = await self.compose(run, evidence, history, rewrite_cost, deadline=deadline) if evidence or can_recall else {
-                        "claims": [], "insufficient_evidence": True,
-                    }
+                    if learning:
+                        allowed = set(run["input"]["document_ids"])
+                        if any(item["document_id"] not in allowed for item in evidence):
+                            raise StopRun("invalid_evidence_scope")
+                        completed, learning_action = await self.compose_learning(run, evidence, history, rewrite_cost, deadline)
+                        if has_sources:
+                            await self.validate_sources(run, Objective.model_validate(run["input"]))
+                        await self.learning_context_current(run)
+                    else:
+                        completed = await self.compose(run, evidence, history, rewrite_cost, deadline=deadline) if evidence or can_recall else {
+                            "claims": [], "insufficient_evidence": True,
+                        }
                 await self.current(run)
             status, error = "succeeded", None
         except StopRun as exc:
@@ -614,6 +726,29 @@ class Worker:
             LOG.warning("Interaction failed request_id=%s stage=%s error=%s",
                         run["request_id"], stage, type(exc).__name__)
         async with self.database.begin() as connection:
+            binding = run["input"].get("learning")
+            if status == "succeeded" and binding and (binding["plan"] or learning_action):
+                live = await connection.scalar(text("""
+                    SELECT 1 FROM orchestration.runs
+                    WHERE run_id=:run AND lease_id=:lease AND status='running' AND lease_until > now()
+                    FOR UPDATE
+                """), {"run": run["run_id"], "lease": run["lease_id"]})
+                if not live:
+                    return
+                try:
+                    async with connection.begin_nested():
+                        if binding["plan"]:
+                            await read_learning_plan(connection, {
+                                "workspace": run["workspace_id"], "owner": run["user_id"],
+                                "plan": binding["plan"]["plan_id"],
+                            }, lock=True)
+                        if learning_action:
+                            await self.publish_learning_action(connection, run, learning_action, completed)
+                except ApiError as exc:
+                    if exc.status_code == 404:
+                        status, error = "failed", "learning_plan_unavailable"
+                    elif not learning_action or learning_action[0] != "completion":
+                        status, error = "failed", "stale_learning_plan"
             await connection.execute(text("""
                 UPDATE orchestration.runs SET status=:status, result=CAST(:result AS jsonb), error_code=:error,
                     updated_at=now(), lease_id=NULL, lease_until=NULL

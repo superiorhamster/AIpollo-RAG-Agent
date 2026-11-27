@@ -11,7 +11,7 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 import httpx
-from fastapi import Depends, FastAPI, Header, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, Header, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -20,8 +20,12 @@ from rag_db import database_ready, install_database_errors, open_database
 from rag_http import ACCESS_COOKIE, ACCESS_FORMAT, ApiError, health_response, install_http, request_id, require_service, unauthorized, unavailable
 
 from .types import Conversation, EditPlan, Objective, PlanDefinition, PlanView, RunView, RunStepView, StartRun, Version, WorkflowFeatures
-from .curriculum import CurriculumWorker
 from .history import input_limit, prior_history
+from .learning_blueprint import BlueprintDraft, PlanRevision, PlanUpdate
+from .learning_store import (
+    CardDecision, SelectionUpdate, create_learning_plan, decide_card, read_card, read_learning_plan,
+    read_learning_plans, read_selection, revise_learning_plan, update_selection,
+)
 from .worker import ASK_COMPLETION_UNAVAILABLE, Worker, authorize
 
 SERVICE = "agent-orchestrator"
@@ -43,8 +47,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.database = open_database()
     async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
         app.state.client = client
-        workers = [asyncio.create_task(Worker(app.state.database, client).loop()),
-                   asyncio.create_task(CurriculumWorker(app.state.database, client).loop())]
+        workers = [asyncio.create_task(Worker(app.state.database, client).loop())]
         try:
             yield
         finally:
@@ -57,6 +60,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=SERVICE, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+legacy_plan_routes = APIRouter()
 install_http(app)
 install_database_errors(app)
 
@@ -68,7 +72,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/readyz")
 async def readiness() -> Response:
-    return health_response(SERVICE, await database_ready(app.state.database, "orchestration", "orchestration_006"))
+    return health_response(SERVICE, await database_ready(app.state.database, "orchestration", "orchestration_009"))
 
 
 def missing() -> ApiError:
@@ -99,9 +103,94 @@ async def actor(workspace_id: UUID, request: Request) -> UUID:
 Actor = Annotated[UUID, Depends(actor)]
 
 
+def require_learning_plans() -> None:
+    if os.environ.get("LEARNING_PLANS_ENABLED") != "true":
+        raise ApiError(404, "not_found", "Learning Plans are unavailable.")
+
+
+@app.get(BASE + "/learning-cards/{card_id}", dependencies=[Depends(require_learning_plans)])
+async def get_learning_card(workspace_id: UUID, card_id: UUID, user_id: Actor):
+    async with app.state.database.connect() as connection:
+        return await read_card(connection, {"workspace": workspace_id, "owner": user_id, "card": card_id})
+
+
+@app.put(BASE + "/learning-cards/{card_id}", dependencies=[Depends(require_learning_plans)])
+async def act_on_learning_card(workspace_id: UUID, card_id: UUID, data: CardDecision, user_id: Actor):
+    async with app.state.database.begin() as connection:
+        return await decide_card(connection, {"workspace": workspace_id, "owner": user_id, "card": card_id}, data)
+
+
+@app.get(BASE + "/conversations/{conversation_id}/learning-plan", dependencies=[Depends(require_learning_plans)])
+async def get_learning_selection(workspace_id: UUID, conversation_id: UUID, user_id: Actor):
+    async with app.state.database.connect() as connection:
+        return await read_selection(connection, {
+            "workspace": workspace_id, "owner": user_id, "conversation": conversation_id,
+        })
+
+
+@app.put(BASE + "/conversations/{conversation_id}/learning-plan", dependencies=[Depends(require_learning_plans)])
+async def set_learning_selection(workspace_id: UUID, conversation_id: UUID, user_id: Actor, data: SelectionUpdate):
+    async with app.state.database.begin() as connection:
+        return await update_selection(connection, {
+            "workspace": workspace_id, "owner": user_id, "conversation": conversation_id,
+        }, data)
+
+
+@app.post(BASE + "/conversations", status_code=201, dependencies=[Depends(require_learning_plans)])
+async def create_learning_conversation(workspace_id: UUID, user_id: Actor, data: SelectionUpdate):
+    conversation = uuid4()
+    keys = {"workspace": workspace_id, "owner": user_id, "conversation": conversation}
+    async with app.state.database.begin() as connection:
+        await connection.execute(text("""
+            INSERT INTO orchestration.conversations (conversation_id, workspace_id, user_id)
+            VALUES (:conversation, :workspace, :owner)
+        """), keys)
+        selection = await update_selection(connection, keys, data)
+        return {"conversation_id": conversation, **selection}
+
+
+@app.get(BASE + "/learning-plans", dependencies=[Depends(require_learning_plans)])
+async def list_learning_plans(workspace_id: UUID, user_id: Actor):
+    async with app.state.database.connect() as connection:
+        return await read_learning_plans(connection, workspace_id, user_id)
+
+
+@app.post(BASE + "/learning-plans", status_code=201, dependencies=[Depends(require_learning_plans)])
+async def add_learning_plan(workspace_id: UUID, data: BlueprintDraft, user_id: Actor, key: Key):
+    async with app.state.database.begin() as connection:
+        return await create_learning_plan(connection, workspace_id, user_id, key, data)
+
+
+@app.get(BASE + "/learning-plans/{plan_id}", dependencies=[Depends(require_learning_plans)])
+async def get_learning_plan(workspace_id: UUID, plan_id: UUID, user_id: Actor):
+    async with app.state.database.connect() as connection:
+        return await read_learning_plan(connection, {"workspace": workspace_id, "owner": user_id, "plan": plan_id})
+
+
+@app.put(BASE + "/learning-plans/{plan_id}", dependencies=[Depends(require_learning_plans)])
+async def update_learning_plan(
+    workspace_id: UUID, plan_id: UUID, data: PlanUpdate, user_id: Actor,
+):
+    async with app.state.database.begin() as connection:
+        return await revise_learning_plan(
+            connection, {"workspace": workspace_id, "owner": user_id, "plan": plan_id}, data.revision, data.blueprint,
+        )
+
+
+@app.delete(BASE + "/learning-plans/{plan_id}", status_code=204, dependencies=[Depends(require_learning_plans)])
+async def delete_learning_plan(
+    workspace_id: UUID, plan_id: UUID, data: PlanRevision, user_id: Actor,
+):
+    async with app.state.database.begin() as connection:
+        await revise_learning_plan(
+            connection, {"workspace": workspace_id, "owner": user_id, "plan": plan_id}, data.revision, None,
+        )
+    return Response(status_code=204)
+
+
 def digest(payload) -> str:
     # Preserve hashes when optional controls are omitted by older clients.
-    exclude = ({name for name in ("retry_of_run_id", "citation_mode") if getattr(payload, name) is None}
+    exclude = ({name for name in ("retry_of_run_id", "citation_mode", "selection_revision", "learning_action", "learning_days") if getattr(payload, name) is None}
                if isinstance(payload, StartRun) else None)
     if isinstance(payload, PlanDefinition) and payload.steps is None:
         exclude = {"steps"}
@@ -166,7 +255,7 @@ def check_plan_features(data: PlanDefinition) -> None:
         raise ApiError(409, "feature_disabled", "Curriculum generation is not enabled.")
 
 
-@app.post(BASE + "/plans", status_code=201, response_model=PlanView)
+@legacy_plan_routes.post(BASE + "/plans", status_code=201, response_model=PlanView)
 async def create_plan(workspace_id: UUID, data: PlanDefinition, key: Key, user_id: Actor, request: Request):
     check_plan_features(data)
     if any(step.citations for step in data.steps or []):
@@ -191,7 +280,7 @@ async def create_plan(workspace_id: UUID, data: PlanDefinition, key: Key, user_i
         return await plan_payload(connection, plan)
 
 
-@app.get(BASE + "/plans/{plan_id}", response_model=PlanView)
+@legacy_plan_routes.get(BASE + "/plans/{plan_id}", response_model=PlanView)
 async def get_plan(workspace_id: UUID, plan_id: UUID, user_id: Actor):
     async with app.state.database.connect() as connection:
         plan = await owned_plan(connection, scope(workspace_id, user_id, plan_id))
@@ -225,7 +314,7 @@ async def revise(workspace_id: UUID, plan_id: UUID, expected: int, user_id: UUID
         return await plan_payload(connection, await owned_plan(connection, keys))
 
 
-@app.patch(BASE + "/plans/{plan_id}", response_model=PlanView)
+@legacy_plan_routes.patch(BASE + "/plans/{plan_id}", response_model=PlanView)
 async def edit_plan(workspace_id: UUID, plan_id: UUID, data: EditPlan, user_id: Actor):
     check_plan_features(data)
     if any(step.citations for step in data.steps or []):
@@ -234,12 +323,12 @@ async def edit_plan(workspace_id: UUID, plan_id: UUID, data: EditPlan, user_id: 
                         PlanDefinition.model_validate(data.model_dump()))
 
 
-@app.post(BASE + "/plans/{plan_id}/regenerate", response_model=PlanView)
+@legacy_plan_routes.post(BASE + "/plans/{plan_id}/regenerate", response_model=PlanView)
 async def regenerate_plan(workspace_id: UUID, plan_id: UUID, data: Version, user_id: Actor):
     return await revise(workspace_id, plan_id, data.plan_version, user_id, None)
 
 
-@app.post(BASE + "/plans/{plan_id}/accept", response_model=PlanView)
+@legacy_plan_routes.post(BASE + "/plans/{plan_id}/accept", response_model=PlanView)
 async def accept_plan(workspace_id: UUID, plan_id: UUID, data: Version, key: Key, user_id: Actor):
     keys = scope(workspace_id, user_id, plan_id)
     async with app.state.database.begin() as connection:
@@ -261,7 +350,7 @@ async def accept_plan(workspace_id: UUID, plan_id: UUID, data: Version, key: Key
         return await plan_payload(connection, plan)
 
 
-@app.post(BASE + "/plans/{plan_id}/cancel", response_model=PlanView)
+@legacy_plan_routes.post(BASE + "/plans/{plan_id}/cancel", response_model=PlanView)
 async def cancel_plan(workspace_id: UUID, plan_id: UUID, user_id: Actor):
     keys = scope(workspace_id, user_id, plan_id)
     async with app.state.database.begin() as connection:
@@ -304,8 +393,11 @@ async def retry_context(connection: AsyncConnection, data: StartRun, workspace_i
     original = result.mappings().one_or_none()
     if original is None:
         raise missing()
-    if (original["interaction"] != "ASK" or original["status"] != "failed"
-            or original["error_code"] not in {ASK_COMPLETION_UNAVAILABLE, "invalid_model_output"} or original["conversation_id"] is None):
+    learning = original["input"].get("learning")
+    learning_write = learning and learning["action"] in {"create", "edit"}
+    failed = original["status"] == "failed" and original["error_code"] in {ASK_COMPLETION_UNAVAILABLE, "invalid_model_output"}
+    committed = learning_write and original["status"] == "succeeded"
+    if original["interaction"] != "ASK" or original["conversation_id"] is None or not (failed or committed):
         raise ApiError(409, "run_not_retryable", "Only an unavailable Ask completion can be retried.")
     objective = Objective.model_validate(original["input"])
     if (data.objective != objective
@@ -321,11 +413,112 @@ async def retry_context(connection: AsyncConnection, data: StartRun, workspace_i
             UPDATE orchestration.runs SET history_snapshot=CAST(:history AS jsonb) WHERE run_id=:id
         """), {"id": original["run_id"], "history": json.dumps(history, ensure_ascii=False)})
     return {"objective": objective, "conversation": original["conversation_id"], "history": history,
-            "citation_mode": citation_mode}
+            "citation_mode": citation_mode, "learning": learning}
+
+
+async def check_learning_receipt(connection: AsyncConnection, keys: dict, run: dict) -> None:
+    result = run["result"] or {}
+    if run["status"] != "succeeded":
+        return
+    plan = result.get("learning_plan_id")
+    if result.get("learning_card"):
+        binding = (run["objective"] or {}).get("learning") or {}
+        plan = (binding.get("plan") or {}).get("plan_id")
+    if plan:
+        await read_learning_plan(connection, {"workspace": keys["workspace"], "owner": keys["user"], "plan": plan})
+
+
+async def recover_learning_attempt(connection: AsyncConnection, keys: dict, parent: UUID) -> dict | None:
+    root = await connection.scalar(text("""
+        WITH RECURSIVE lineage AS (
+            SELECT run_id, retry_of_run_id FROM orchestration.runs
+            WHERE workspace_id=:workspace AND user_id=:user AND run_id=:parent
+            UNION ALL
+            SELECT r.run_id, r.retry_of_run_id
+            FROM orchestration.runs r JOIN lineage l ON r.run_id=l.retry_of_run_id
+            WHERE r.workspace_id=:workspace AND r.user_id=:user
+        )
+        SELECT run_id FROM lineage WHERE retry_of_run_id IS NULL
+    """), {**keys, "parent": parent})
+    if root is None:
+        raise missing()
+    # Different transport keys and retries of different failed descendants share this lock.
+    await connection.execute(text("SELECT run_id FROM orchestration.runs WHERE run_id=:root FOR UPDATE"), {"root": root})
+    rows = await connection.execute(text(f"""
+        WITH RECURSIVE attempts(id) AS (
+            SELECT CAST(:root AS uuid)
+            UNION ALL
+            SELECT r.run_id FROM orchestration.runs r JOIN attempts a ON r.retry_of_run_id=a.id
+            WHERE r.workspace_id=:workspace AND r.user_id=:user
+        )
+        SELECT {RUN_FIELDS} FROM orchestration.runs
+        WHERE run_id IN (SELECT id FROM attempts) AND status IN ('queued', 'running', 'succeeded')
+        ORDER BY (status='succeeded') DESC, created_at, run_id LIMIT 1
+    """), {**keys, "root": root})
+    prior = rows.mappings().one_or_none()
+    if prior is None:
+        return None
+    recovered = dict(prior)
+    await check_learning_receipt(connection, keys, recovered)
+    return recovered
+
+
+async def learning_binding(connection: AsyncConnection, data: StartRun, workspace_id: UUID,
+                           owner_id: UUID, conversation: UUID) -> dict:
+    keys = {"workspace": workspace_id, "owner": owner_id, "conversation": conversation}
+    selection = await read_selection(connection, keys)
+    if data.selection_revision is not None and selection["selection_revision"] != data.selection_revision:
+        raise ApiError(409, "stale_plan_selection", "Reload the conversation selection.")
+    identifier = selection["selected_plan_id"]
+    plan = await read_learning_plan(connection, {**keys, "plan": identifier}) if identifier else None
+    if data.learning_action == "edit" and plan is None:
+        raise ApiError(409, "missing_learning_plan", "Select a Learning Plan to edit.")
+    result = await connection.execute(text("""
+        SELECT event_id, plan_id, kind, state_revision, metadata, created_at
+        FROM orchestration.learning_plan_events
+        WHERE workspace_id=:workspace AND owner_id=:owner
+        ORDER BY created_at DESC, event_id DESC LIMIT 8
+    """), keys)
+    events = [dict(row) for row in reversed(result.mappings().all())]
+    tagged, versions = [], []
+    if plan:
+        private = await connection.execute(text("""
+            SELECT run_id, input->>'query' AS question,
+                   jsonb_path_query_array(result, '$.claims[*].text') AS answers,
+                   input#>>'{learning,plan,content_version}' AS version
+            FROM orchestration.runs
+            WHERE workspace_id=:workspace AND user_id=:owner AND conversation_id=:conversation
+              AND status='succeeded' AND input#>>'{learning,plan,plan_id}'=:plan_id
+            ORDER BY created_at DESC, run_id DESC LIMIT 6
+        """), {**keys, "plan_id": str(identifier)})
+        tagged = [dict(row) for row in reversed(private.mappings().all())]
+        recent = await connection.execute(text("""
+            SELECT content_version AS version, content FROM orchestration.learning_plan_versions
+            WHERE workspace_id=:workspace AND owner_id=:owner AND plan_id=:plan
+              AND content_version < :current
+            ORDER BY (content_version = ANY(CAST(:referenced AS bigint[]))) DESC, content_version DESC
+            LIMIT 2
+        """), {**keys, "plan": identifier, "current": plan["content_version"],
+               "referenced": [int(item["version"]) for item in tagged if item["version"]]})
+        versions = [dict(row) for row in recent.mappings().all()]
+    return {
+        "action": data.learning_action, "days": data.learning_days, "events": events,
+        "tagged": tagged, "versions": versions,
+        "plan": plan, "selection_revision": selection["selection_revision"],
+        "selection_unavailable": selection["unavailable"],
+    }
 
 
 @app.post(BASE + "/runs", status_code=202, response_model=RunView)
 async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor, request: Request):
+    if data.mode == "PLAN":
+        raise ApiError(409, "legacy_plan_disabled", "Legacy Plan execution is unavailable.")
+    learning_enabled = os.environ.get("LEARNING_PLANS_ENABLED") == "true"
+    learning_ask = data.mode == "ASK" and data.objective.capability == "LEARN" and data.objective.task == "answer"
+    if (data.learning_action is not None or data.selection_revision is not None) and not learning_enabled:
+        raise ApiError(404, "not_found", "Learning Plans are unavailable.")
+    if not data.objective.document_ids and not (learning_enabled and learning_ask):
+        raise ApiError(422, "sources_required", "Choose at least one source for this interaction.")
     keys = scope(workspace_id, user_id, uuid4())
     async with app.state.database.begin() as connection:
         await connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 5005))"),
@@ -338,6 +531,7 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
         if replay is not None:
             if replay["request_hash"] != digest(data):
                 raise ApiError(409, "idempotency_conflict", "The request key is already used.")
+            await check_learning_receipt(connection, keys, replay)
             return {name: value for name, value in replay.items() if name != "request_hash"}
         objective = await pinned_objective(connection, data, workspace_id, user_id)
         if objective.task == "socratic_tutor" and os.environ.get("AGENTIC_TUTOR_ENABLED") != "true":
@@ -347,10 +541,18 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
         conversation = data.conversation_id
         history = None
         citation_mode = data.citation_mode
+        learning = None
         if data.retry_of_run_id is not None:
             retry = await retry_context(connection, data, workspace_id, user_id)
             objective, conversation, history = retry["objective"], retry["conversation"], retry["history"]
             citation_mode = retry["citation_mode"]
+            learning = retry["learning"]
+            if learning and not learning_enabled:
+                raise ApiError(404, "not_found", "Learning Plans are unavailable.")
+            if learning and learning["action"] in {"create", "edit"}:
+                recovered = await recover_learning_attempt(connection, keys, data.retry_of_run_id)
+                if recovered is not None:
+                    return recovered
         if data.mode == "ASK":
             if conversation:
                 await owned_conversation(connection, scope(workspace_id, user_id, conversation))
@@ -361,6 +563,10 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
                     VALUES (:conversation, :workspace, :user)
                 """), {**keys, "conversation": conversation})
         run_input = objective.model_dump(mode="json")
+        if data.retry_of_run_id is None and learning_enabled and learning_ask:
+            learning = await learning_binding(connection, data, workspace_id, user_id, conversation)
+        if learning is not None:
+            run_input["learning"] = learning
         if objective.task == "mock_defense":
             run_input["defense_workflow"] = "v1"
         if citation_mode is not None:
@@ -382,7 +588,7 @@ async def start_run(workspace_id: UUID, data: StartRun, key: Key, user_id: Actor
                 :id, :workspace, :user, :mode, CAST(:input AS jsonb), :conversation, :plan, :version,
                 :request, :key, :hash, :retry, CAST(:history AS jsonb)
             ) RETURNING {RUN_FIELDS}
-        """), {**keys, "mode": data.mode, "input": json.dumps(run_input), "conversation": conversation,
+        """), {**keys, "mode": data.mode, "input": json.dumps(run_input, default=str), "conversation": conversation,
                "plan": data.plan_id, "version": data.plan_version, "request": request_id(request),
                "key": key, "hash": digest(data), "retry": data.retry_of_run_id,
                "history": json.dumps(history, ensure_ascii=False) if history is not None else None})
@@ -441,7 +647,8 @@ async def cancel_run(workspace_id: UUID, run_id: UUID, user_id: Actor):
     async with app.state.database.begin() as connection:
         await connection.execute(text("""
             UPDATE orchestration.runs SET status='cancelled', lease_id=NULL, lease_until=NULL, updated_at=now()
-            WHERE workspace_id=:workspace AND user_id=:user AND run_id=:id AND status IN ('queued', 'running')
+            WHERE workspace_id=:workspace AND user_id=:user AND run_id=:id
+              AND interaction IN ('ASK', 'AGENT') AND status IN ('queued', 'running')
         """), keys)
         return await read_run(connection, keys)
 
@@ -451,8 +658,10 @@ async def list_conversations(workspace_id: UUID, user_id: Actor):
     async with app.state.database.connect() as connection:
         rows = await connection.execute(text("""
             SELECT conversation.conversation_id, conversation.created_at,
-                (SELECT input->>'query' FROM orchestration.runs
-                 WHERE conversation_id=conversation.conversation_id ORDER BY created_at LIMIT 1) AS name
+                COALESCE((SELECT NULLIF(input->>'query', '') FROM orchestration.runs
+                 WHERE conversation_id=conversation.conversation_id
+                   AND workspace_id=conversation.workspace_id AND user_id=conversation.user_id
+                 ORDER BY created_at, run_id LIMIT 1), 'Untitled chat') AS name
             FROM orchestration.conversations conversation
             WHERE workspace_id=:workspace AND user_id=:user ORDER BY created_at DESC LIMIT 50
         """), {"workspace": workspace_id, "user": user_id})
@@ -487,10 +696,13 @@ async def artifact_run(workspace_id: UUID, user_id: UUID, run_id: UUID, request:
         if run is None:
             raise missing()
         payload = dict(run)
+        payload["input"] = {key: value for key, value in payload["input"].items() if key != "learning"}
         result = payload["result"]
         if result:
-            claims = [claim for claim in result["claims"] if claim.get("source") != "conversation"]
-            public_result = {key: value for key, value in result.items() if key not in {"tutor_question", "defense_review"}}
+            claims = [claim for claim in result["claims"] if claim.get("source", "document") == "document"]
+            public_result = {key: value for key, value in result.items() if key not in {
+                "tutor_question", "defense_review", "unsupported_parts", "learning_plan_id", "learning_card", "learning_reply",
+            }}
             payload["result"] = {**public_result, "claims": claims, "insufficient_evidence": not claims}
         return payload
 
@@ -508,11 +720,11 @@ async def get_run_steps(workspace_id: UUID, run_id: UUID, user_id: Actor):
 
 @app.get(BASE + "/workflow-features", response_model=WorkflowFeatures)
 async def workflow_features(workspace_id: UUID, user_id: Actor):
-    return {"mock_defense": os.environ.get("AGENTIC_DEFENSE_ENABLED") == "true",
+    return {"learning_plans": os.environ.get("LEARNING_PLANS_ENABLED") == "true",
+            "mock_defense": os.environ.get("AGENTIC_DEFENSE_ENABLED") == "true",
             "verified_writing": os.environ.get("AGENTIC_WRITING_ENABLED") == "true",
             "discovery": os.environ.get("AGENTIC_DISCOVERY_ENABLED") == "true",
             "research": os.environ.get("AGENTIC_RESEARCH_ENABLED") == "true",
-            "custom_plan": os.environ.get("AGENTIC_WORKFLOW_ENABLED") == "true",
+            "custom_plan": False,
             "socratic_tutor": os.environ.get("AGENTIC_TUTOR_ENABLED") == "true",
-            "curriculum": (os.environ.get("AGENTIC_CURRICULUM_ENABLED") == "true"
-                           and os.environ.get("AGENTIC_WORKFLOW_ENABLED") == "true")}
+            "curriculum": False}

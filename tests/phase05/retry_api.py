@@ -181,48 +181,34 @@ class RetryApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 202, response.text)
         self.assertEqual(response.json()["run_id"], str(original))
 
-    async def test_plan_approval_and_version_invariants_survive_migration(self):
+    async def test_legacy_plan_write_routes_and_execution_are_inactive(self):
         plans = f"/v1/workspaces/{self.workspace}/plans"
-        response = await self.client.post(plans, json=self.objective, headers={"Idempotency-Key": str(uuid4())})
-        self.assertEqual(response.status_code, 201, response.text)
-        plan = response.json()
-        self.assertEqual(plan["state"], "REVIEW")
-        self.assertTrue(plan["expected_outputs"])
-        self.assertTrue(all(set(step) == {"tool", "action"} for step in plan["steps"]))
-        route = plans + "/" + plan["plan_id"]
-        body = {"mode": "PLAN", "plan_id": plan["plan_id"], "plan_version": 1}
+        plan_id = str(uuid4())
+        key = {"Idempotency-Key": str(uuid4())}
+        self.assertEqual((await self.client.post(plans, json=self.objective, headers=key)).status_code, 404)
+        self.assertEqual((await self.client.post(
+            f"{plans}/{plan_id}/accept", json={"plan_version": 1}, headers=key,
+        )).status_code, 404)
+        result = await self.client.post(
+            self.route, json={"mode": "PLAN", "plan_id": plan_id, "plan_version": 1}, headers=key,
+        )
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(result.json()["code"], "legacy_plan_disabled")
 
-        async def execute(payload):
-            return await self.client.post(self.route, json=payload, headers={"Idempotency-Key": str(uuid4())})
-
-        self.assertEqual((await execute(body)).status_code, 409)
-        accept_key = {"Idempotency-Key": str(uuid4())}
-        first = await self.client.post(route + "/accept", json={"plan_version": 1}, headers=accept_key)
-        second = await self.client.post(route + "/accept", json={"plan_version": 1}, headers=accept_key)
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(first.json(), second.json())
-        owner = self.user
-        app.dependency_overrides[actor] = lambda: uuid4()
-        self.assertEqual((await self.client.post(route + "/accept", json={"plan_version": 1}, headers=accept_key)).status_code, 404)
-        self.assertEqual((await execute(body)).status_code, 404)
-        app.dependency_overrides[actor] = lambda: owner
-        run = await execute(body)
-        self.assertEqual(run.status_code, 202, run.text)
-        stored = await self.stored(run.json()["run_id"])
-        self.assertEqual((str(stored["plan_id"]), stored["plan_version"]), (plan["plan_id"], 1))
-        edited = await self.client.patch(route, json={**self.objective, "query": "Updated question", "expected_version": 1})
-        self.assertEqual(edited.status_code, 200, edited.text)
-        self.assertEqual((edited.json()["plan_version"], edited.json()["state"]), (2, "REVIEW"))
-        self.assertEqual((await execute(body)).status_code, 409)
-        self.assertEqual((await execute({**body, "plan_version": 2})).status_code, 409)
-        accepted = await self.client.post(route + "/accept", json={"plan_version": 2},
-                                          headers={"Idempotency-Key": str(uuid4())})
-        self.assertEqual(accepted.status_code, 200)
-        regenerated = await self.client.post(route + "/regenerate", json={"plan_version": 2})
-        self.assertEqual(regenerated.status_code, 200, regenerated.text)
-        self.assertEqual((regenerated.json()["plan_version"], regenerated.json()["state"]), (3, "REVIEW"))
-        self.assertEqual((await execute({**body, "plan_version": 2})).status_code, 409)
-        self.assertEqual((await execute({**body, "plan_version": 3})).status_code, 409)
+    async def test_worker_leaves_legacy_queue_and_expired_lease_untouched(self):
+        queued = await self.seed(status="queued", interaction="PLAN", error=None)
+        expired = await self.seed(status="running", interaction="PLAN", error=None)
+        async with self.database.begin() as connection:
+            await connection.execute(text("""
+                UPDATE orchestration.runs SET step='compose', lease_id=:lease, lease_until=now()-interval '1 minute'
+                WHERE run_id=:id
+            """), {"id": expired, "lease": uuid4()})
+        async with httpx.AsyncClient() as client:
+            await Worker(self.database, client).claim()
+        self.assertEqual((await self.stored(queued))["status"], "queued")
+        expired_run = await self.stored(expired)
+        self.assertEqual(expired_run["status"], "running")
+        self.assertEqual(expired_run["step"], "compose")
 
     async def test_worker_executes_ask_with_a_read_only_database_mapping(self):
         identifier = await self.seed(status="running", error=None)
