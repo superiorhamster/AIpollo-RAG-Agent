@@ -35,7 +35,7 @@ jobs:
         run: make verify-phase02
       - name: Verify UI reliability against synthetic fixtures
         run: make verify-ui
-      - name: Verify indexing, scoped retrieval, and accepted Plan execution
+      - name: Verify indexing, scoped retrieval, and Learning Plan workflows
         run: make verify-phase03
       - name: Install Grype
         id: grype

@@ -36,7 +36,7 @@ Only the web client, gateway, and local infrastructure ports are published, all 
 | `make verify` | Check infrastructure health, application endpoints, and the web home page. |
 | `make verify-phase01` | Run the identity and workspace API, database, and Playwright checks in an isolated Compose project. |
 | `make verify-phase02` | Run document API, fault recovery, and Playwright checks in an isolated Compose project. |
-| `make verify-phase03` | Check queued indexing and scoped retrieval with synthetic data in an isolated Compose project. |
+| `make verify-phase03` | Check queued indexing, scoped retrieval, Learning Plan workflows, and the legacy execution fence in an isolated synthetic Compose project. |
 | `make promote-admin USER_ID=<uuid>` | Give an existing account the platform Admin role and revoke its active sessions. |
 | `make down` | Stop and remove containers while retaining data volumes. |
 | `make infra-up` / `make infra-down` | Start or stop only the five infrastructure services. |

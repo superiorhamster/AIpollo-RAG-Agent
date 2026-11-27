@@ -22,6 +22,18 @@ class WorkspacePage {
     await this.page.goto('/workspaces/' + workspace)
   }
 
+  async createLearningPlan() {
+    const composer = this.assistant.getByLabel('Question or objective')
+    await composer.fill('/plan Learn from the academic source')
+    await this.assistant.getByRole('group', { name: 'How many days would you like to study?' })
+      .getByRole('radio', { name: '2 days', exact: true }).check()
+    await this.assistant.getByRole('button', { name: 'Send', exact: true }).click()
+    const card = this.assistant.getByRole('region', { name: 'Created Learning Plan' })
+    await expect(card.getByRole('listitem')).toHaveCount(2, { timeout: 30000 })
+    await expect(this.sidebar.getByRole('radio', { checked: true })).toHaveAccessibleName('Fixture learning plan')
+    return card
+  }
+
   source() {
     return this.sidebar.getByRole('checkbox', { name: 'study.pdf', exact: true })
   }
@@ -36,6 +48,8 @@ test('retries a gateway failure in the same Ask turn with the original sources',
   const secondReply = new Promise<void>(resolve => { releaseSecond = resolve })
   const conversation = '06aa095b-84e0-4350-91f9-59071f9bc125'
   const question = 'Which source supports this answer?'
+  await page.route('**/conversations/' + conversation + '/learning-plan', route =>
+    route.fulfill({ json: { selected_plan_id: null, selection_revision: 0 } }))
   await page.route('**/v1/workspaces/*/runs', async route => {
     const body = route.request().postDataJSON()
     submitted.push({ body, key: route.request().headers()['idempotency-key'] })
@@ -76,6 +90,7 @@ test('retries a gateway failure in the same Ask turn with the original sources',
   await expect(retry).toBeEnabled()
   const citationMode = assistant.getByRole('combobox', { name: 'Citation Mode' })
   expect(submitted[0].body.citation_mode).toBe('segment')
+  expect(submitted[0].body.selection_revision).toBe(0)
   await citationMode.selectOption('chunk')
   await expect(citationMode).toHaveValue('chunk')
   await workspace.source().uncheck()
@@ -99,18 +114,14 @@ test('retries a gateway failure in the same Ask turn with the original sources',
   expect(new Set(submitted.map(item => item.key)).size).toBe(3)
 })
 
-test('an accepted plan returns a citation that opens its PDF page', async ({ page }) => {
+test('Plan-aware Ask returns a scoped citation that opens its PDF page', async ({ page }) => {
   const workspace = new WorkspacePage(page)
   await workspace.open()
   const assistant = workspace.assistant
-  await workspace.modes.getByRole('button', { name: 'Plan', exact: true }).click()
-  await assistant.getByLabel('Question or objective').fill('What is the academic source?')
   await workspace.source().check()
-  await assistant.getByRole('button', { name: 'Create plan' }).click()
-  await expect(assistant.getByRole('heading', { name: 'Plan version 1' })).toBeVisible()
-  await expect(assistant.getByRole('button', { name: 'Run accepted plan' })).toHaveCount(0)
-  await assistant.getByRole('button', { name: 'Accept plan', exact: true }).click()
-  await assistant.getByRole('button', { name: 'Run accepted plan' }).click()
+  await workspace.createLearningPlan()
+  await assistant.getByLabel('Question or objective').fill('What is the academic source?')
+  await assistant.getByRole('button', { name: 'Send', exact: true }).click()
   const citation = assistant.getByRole('button', { name: /study\.pdf, page \d+/ }).first()
   await expect(citation).toBeVisible({ timeout: 30000 })
   const number = (await citation.textContent())?.match(/page (\d+)/)?.[1]
@@ -163,12 +174,8 @@ test('mobile viewport supports tab switching, preserves draft state across tabs,
   await expect(assistant.getByLabel('Question or objective')).toHaveValue(draftQuery)
   await expect(assistant.getByRole('checkbox', { name: 'study.pdf', exact: true })).toBeChecked()
 
-  // Create and run plan
-  await workspace.modes.getByRole('button', { name: 'Plan', exact: true }).click()
-  await assistant.getByRole('button', { name: 'Create plan' }).click()
-  await expect(assistant.getByRole('heading', { name: /Plan version \d+/ })).toBeVisible()
-  await assistant.getByRole('button', { name: 'Accept plan', exact: true }).click()
-  await assistant.getByRole('button', { name: 'Run accepted plan' }).click()
+  // Submit the preserved draft as a sourced Ask.
+  await assistant.getByRole('button', { name: 'Send', exact: true }).click()
 
   const citation = assistant.getByRole('button', { name: /study\.pdf, page \d+/ }).first()
   await expect(citation).toBeVisible({ timeout: 30000 })
@@ -197,6 +204,7 @@ test('keyboard accessibility, focus navigation, and accessible names', async ({ 
   const submitButton = assistant.getByRole('button', { name: 'Send' })
 
   await expect(modeSelect).toBeVisible()
+  await modeSelect.getByRole('button', { name: 'Agent', exact: true }).click()
   await expect(capabilitySelect).toBeVisible()
   await expect(outputSelect).toBeVisible()
   await expect(queryInput).toBeVisible()
@@ -216,47 +224,32 @@ test('keyboard accessibility, focus navigation, and accessible names', async ({ 
   expect(await statusOrLive.count()).toBeGreaterThan(0)
 })
 
-test('handles validation errors and plan cancellation lifecycle', async ({ page }) => {
+test('validates a source-required Agent run and rejects an Edit proposal without changing the Plan', async ({ page }) => {
   const workspace = new WorkspacePage(page)
   await workspace.open()
-
   const assistant = workspace.assistant
-  await expect(assistant).toBeVisible()
-
-  // Validation error state: question filled but no source checked
+  await workspace.modes.getByRole('button', { name: 'Agent', exact: true }).click()
   await assistant.getByLabel('Question or objective').fill('Query without sources')
-  const studyPdf = workspace.source()
-  if (await studyPdf.isChecked()) {
-    await studyPdf.uncheck()
-  }
-  await assistant.getByRole('button', { name: 'Send' }).click()
-  const alert = assistant.getByRole('alert')
-  await expect(alert).toBeVisible()
-  await expect(alert).toHaveText('Enter a question and choose between 1 and 100 sources.')
+  await expect(workspace.source()).not.toBeChecked()
+  await assistant.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(assistant.getByRole('alert')).toHaveText('Enter a question and choose between 1 and 100 sources.')
 
-  // Create a plan to test cancellation
-  await workspace.modes.getByRole('button', { name: 'Plan', exact: true }).click()
+  await workspace.modes.getByRole('button', { name: 'Ask', exact: true }).click()
   await workspace.source().check()
-  await assistant.getByRole('button', { name: 'Create plan' }).click()
-  await expect(assistant.getByRole('heading', { name: /Plan version \d+/ })).toBeVisible()
-
-  await assistant.getByRole('button', { name: 'Accept plan', exact: true }).click()
-  await expect(assistant.getByRole('button', { name: 'Run accepted plan' })).toBeVisible()
-  await assistant.getByRole('button', { name: 'Edit plan', exact: true }).click()
-  await assistant.getByLabel('Question or objective').fill('Review a revised question with the selected source')
-  await assistant.getByRole('button', { name: 'Save new version', exact: true }).click()
-  await expect(assistant.getByRole('heading', { name: 'Plan version 2', exact: true })).toBeVisible()
-  await expect(assistant.getByRole('button', { name: 'Run accepted plan' })).toHaveCount(0)
-
-  // Plan cancellation
-  const cancelButton = assistant.getByRole('button', { name: 'Cancel plan' })
-  await expect(cancelButton).toBeVisible()
-  await cancelButton.click()
-
-  // Verify cancelled plan state
-  await expect(assistant.getByText('Plan cancelled.')).toBeVisible()
-  await expect(assistant.getByRole('button', { name: 'Accept plan' })).toHaveCount(0)
-  await expect(assistant.getByRole('button', { name: 'Run accepted plan' })).toHaveCount(0)
+  const plan = await workspace.createLearningPlan()
+  await assistant.getByLabel('Question or objective').fill('/edit-plan Rename the plan')
+  await assistant.getByRole('button', { name: 'Send', exact: true }).click()
+  const proposal = assistant.getByRole('region', { name: 'Learning Plan suggestion' })
+  await expect(proposal.getByRole('heading', { name: 'Change Preview' })).toBeVisible({ timeout: 30000 })
+  await expect(proposal.getByText('Before: Fixture learning plan', { exact: true })).toBeVisible()
+  await expect(proposal.getByText('After: Updated fixture learning plan', { exact: true })).toBeVisible()
+  await proposal.getByRole('button', { name: 'Reject', exact: true }).click()
+  await expect(proposal.getByRole('status')).toHaveText('Suggestion rejected.')
+  await expect(proposal.getByRole('button', { name: 'Accept', exact: true })).toHaveCount(0)
+  await plan.getByRole('button', { name: 'Open Learning Plan' }).click()
+  const detail = page.getByRole('region', { name: 'Plan detail' })
+  await expect(detail.getByRole('heading', { name: 'Fixture learning plan', exact: true })).toBeVisible()
+  await expect(detail.getByRole('progressbar')).toHaveAttribute('value', '0')
 })
 
 test('evidence table is saved and opens the cited source', async ({ page }) => {
@@ -264,6 +257,7 @@ test('evidence table is saved and opens the cited source', async ({ page }) => {
   await workspace.open()
   const assistant = workspace.assistant
   await workspace.source().check()
+  await workspace.modes.getByRole('button', { name: 'Agent', exact: true }).click()
   await assistant.getByRole('combobox', { name: 'Capability' }).selectOption('RESEARCH')
   await assistant.getByRole('combobox', { name: 'Output' }).selectOption('evidence_table')
   await assistant.getByLabel('Question or objective').fill('What is the academic source?')
