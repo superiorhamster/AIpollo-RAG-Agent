@@ -2,6 +2,9 @@
 
 ## Run the development stack
 
+For the redesigned Ask and Learning Plan flows, start with the
+[design and team handoff index](docs/ask-learning-plan/README.md).
+
 Install Git, Bash, GNU Make, Docker Engine or Docker Desktop, and the Docker Compose plugin. Start Docker, then run this from the repository root.
 
 ```bash
@@ -33,7 +36,7 @@ Only the web client, gateway, and local infrastructure ports are published, all 
 | `make verify` | Check infrastructure health, application endpoints, and the web home page. |
 | `make verify-phase01` | Run the identity and workspace API, database, and Playwright checks in an isolated Compose project. |
 | `make verify-phase02` | Run document API, fault recovery, and Playwright checks in an isolated Compose project. |
-| `make verify-phase03` | Check queued indexing and scoped retrieval with synthetic data in an isolated Compose project. |
+| `make verify-phase03` | Check queued indexing, scoped retrieval, Learning Plan workflows, and the legacy execution fence in an isolated synthetic Compose project. |
 | `make promote-admin USER_ID=<uuid>` | Give an existing account the platform Admin role and revoke its active sessions. |
 | `make down` | Stop and remove containers while retaining data volumes. |
 | `make infra-up` / `make infra-down` | Start or stop only the five infrastructure services. |
@@ -201,19 +204,18 @@ and opens the cited PDF page. Its own test data is removed afterwards. Run one
 full verification stack at a time on resource-limited hosts; retained main-project
 volumes and queued jobs are not part of the test.
 
-### Opt-in reviewed workflows and tutoring
+### Learning Plans and opt-in tutoring
 
-Set `AGENTIC_WORKFLOW_ENABLED=true` and/or `AGENTIC_TUTOR_ENABLED=true` in private
-`.env`, then recreate with your existing Compose overlay and `make up`. The
-orchestration migration preserves historical plans and their approvals.
-**Customize activities** saves a new plan version with up to six source-scoped
-activities. Review and Accept that version before execution. Per-activity progress
-and cited results are available in the assistant and `GET /v1/workspaces/{id}/runs/{run}/steps`.
+Set `LEARNING_PLANS_ENABLED=true` in the private dev profile and recreate with
+your existing Compose files. Use `/plan` to create a private Learning Plan and
+`/edit-plan` to propose a change. The workspace manager also supports manual
+authoring and objective progress. Historical workflow plans and approvals remain
+stored. Active legacy PLAN execution is fenced. See the
+[workflow and configuration guides](docs/ask-learning-plan/README.md).
 **Socratic tutor** is an Ask/Learn task with **More hints** and **Show solution**
 actions. Tutor questions stay in the private conversation history.
 Feature availability comes from the authenticated `workflow-features` endpoint.
-These flags default to false. Curriculum generation and the later Agentic RAG
-milestones are tracked in `harness/build/change-20261121-agentic-rag.md`.
+Set `AGENTIC_TUTOR_ENABLED=true` to opt in to tutoring. These flags default to false.
 
 
 ### Ask citation mode
@@ -230,18 +232,8 @@ data flow, API and prompts, parser setup, verification commands and troubleshoot
 The [implementation record](harness/build/change-20261122-sentence-citation-mvp.md)
 records observed model and browser results.
 
-Set `AGENTIC_CURRICULUM_ENABLED=true` alongside `AGENTIC_WORKFLOW_ENABLED=true`
-to enable source-grounded study schedules in Plan → Learn → Study guide. Choose
-1–6 study days. The draft is queued durably; reload the same tab to resume
-viewing it. Each day shows activities, expected materials and source pages.
-Missing chapters, provider failures and invalid drafts remain unaccepted; adjust
-the objective or regenerate. Accept the completed version, then start it to
-produce all materials in order for the student to use on those days. This does
-not schedule future background executions. Disabling the flag stops new draft
-generation while preserving saved plans and approved workflows.
-
-For opt-in multi-paper comparison, set `AGENTIC_RESEARCH_ENABLED=true`. Agent and
-accepted Plan research comparison/evidence-table/synthesis tasks require 2–5
+For opt-in multi-paper comparison, set `AGENTIC_RESEARCH_ENABLED=true`.
+Agent research comparison/evidence-table/synthesis tasks require 2–5
 papers. Each paper receives its own search, with at most two supplementary
 searches across the run. The cited paper × criterion matrix marks missing data;
 a separate semantic check removes unsupported synthesis claims after at most

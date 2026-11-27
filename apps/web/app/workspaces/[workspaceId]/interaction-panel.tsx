@@ -1,10 +1,14 @@
 'use client'
 
+import { CreatedLearningPlan, LearningCard } from './learning-card'
+
 import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
+import { createPortal } from 'react-dom'
 import { RotateCw } from 'lucide-react'
 import { DesignIcon } from '../../components/aipollo'
 import { useWorkspaceLanguage } from '../../components/workspace-language'
-import { api, errorMessage } from '../../lib/api'
+import { ApiError, api, errorMessage } from '../../lib/api'
+import { identifier } from '../../lib/workspace-location'
 import type { DocumentItem } from './document-shelf'
 import { GeneratedContent } from './generated-content'
 import { SourceDiscovery } from './source-discovery'
@@ -12,8 +16,7 @@ import type { CitationTarget } from './pdf-preview'
 
 export type Mode = 'ASK' | 'PLAN' | 'AGENT'
 const modes = [
-  { value: 'ASK', label: 'Ask', vietnamese: 'Hỏi', viHint: 'Trò chuyện · hỏi đáp theo nguồn', icon: 'ask', hint: 'Chat · grounded Q&A · read-only' },
-  { value: 'PLAN', label: 'Plan', vietnamese: 'Lập kế hoạch', viHint: 'Xem xét kế hoạch trước khi phê duyệt', icon: 'plan', hint: 'Review-only · nothing runs until you accept' },
+  { value: 'ASK', label: 'Ask', vietnamese: 'Hỏi', viHint: 'Hỏi đáp và kế hoạch học tập', icon: 'ask', hint: 'Questions and learning plans' },
   { value: 'AGENT', label: 'Agent', vietnamese: 'Agent', viHint: 'Thực thi có giới hạn · theo dõi tiến độ', icon: 'agent', hint: 'Bounded execution · step progress' },
 ] as const
 type Capability = 'LEARN' | 'RESEARCH' | 'WRITE'
@@ -63,11 +66,14 @@ const citationModeKey = 'aipollo.ask.citation-mode'
 
 type Citation = CitationTarget & { chunk_id: string; name: string }
 type MatrixCell = { document_id: string; criterion: string; status: 'supported' | 'contradicted' | 'insufficient'; finding: string; citations: Citation[] }
-type Result = { defense_review?: { assessment: string; assumption: string; feedback: string; target_citations: Citation[]; counter_citations: Citation[] } | null; verified_draft?: boolean | null; evidence_matrix?: MatrixCell[] | null; budget_exhausted?: string | null; tutor_question?: string | null; kind?: string; claims: {
+type PlanSelection = { selected_plan_id: string | null; selection_revision: number; unavailable?: boolean }
+type LearningAction = 'create' | 'edit'
+const noSelection: PlanSelection = { selected_plan_id: null, selection_revision: 0 }
+type Result = { learning_plan_id?: string; learning_reply?: string; learning_card?: string; source_state?: 'zero' | 'empty' | 'found'; unsupported_parts?: string[] | null; defense_review?: { assessment: string; assumption: string; feedback: string; target_citations: Citation[]; counter_citations: Citation[] } | null; verified_draft?: boolean | null; evidence_matrix?: MatrixCell[] | null; budget_exhausted?: string | null; tutor_question?: string | null; kind?: string; claims: {
   text: string
   fields?: Record<string, string>
   citations: Citation[]
-  source?: 'document' | 'conversation'
+  source?: 'document' | 'conversation' | 'plan' | 'general'
 }[]; insufficient_evidence: boolean }
 type Run = {
   run_id: string
@@ -87,13 +93,15 @@ type Run = {
 type Conversation = { conversation_id: string; name: string }
 
 export function InteractionPanel({
-  workspaceId, workspaceName, documents, readySources, onOpenArtifact, selectedSources, setSelectedSources, onSourcesLock, showHistory, canPublish, onCitation, requestedMode, onModeChange,
+  workspaceId, workspaceName, accountId, documents, readySources, onOpenArtifact, onOpenLearningPlan, selectedSources, setSelectedSources, onSourcesLock, showHistory, canPublish, onCitation, requestedMode, onModeChange, learningPlansVisible, learningPlanSlot,
 }: {
   workspaceId: string
   workspaceName: string
+  accountId: string
   documents: DocumentItem[]
   readySources: string[]
   onOpenArtifact: (id: string) => void
+  onOpenLearningPlan: (id: string) => void
   selectedSources: string[]
   setSelectedSources: Dispatch<SetStateAction<string[]>>
   onSourcesLock: (locked: boolean) => void
@@ -101,6 +109,8 @@ export function InteractionPanel({
   canPublish: boolean
   onCitation: (target: CitationTarget) => void
   requestedMode?: { mode: 'ASK' | 'PLAN'; nonce: number }
+  learningPlansVisible?: boolean
+  learningPlanSlot: HTMLDivElement | null
   onModeChange?: (mode: Mode) => void
 }) {
   const base = '/v1/workspaces/' + workspaceId
@@ -112,7 +122,7 @@ export function InteractionPanel({
   const [mode, setMode] = useState<Mode>(requestedMode?.mode ?? 'ASK')
   const [citationMode, setCitationMode] = useState<CitationMode>('segment')
   const [plan, setPlan] = useState<Plan>()
-  const [features, setFeatures] = useState({ custom_plan: false, socratic_tutor: false, curriculum: false, research: false, discovery: false, mock_defense: false })
+  const [features, setFeatures] = useState({ learning_plans: false, custom_plan: false, socratic_tutor: false, curriculum: false, research: false, discovery: false, mock_defense: false })
   const [curriculumDays, setCurriculumDays] = useState(0)
   const [selectedTask, setSelectedTask] = useState('answer')
   useEffect(() => {
@@ -134,6 +144,32 @@ export function InteractionPanel({
   }, [base, run?.run_id, run?.updated_at, run?.interaction])
   const [activeId, setActiveId] = useState<string>()
   const [conversation, setConversation] = useState<string>()
+  const [restoringConversation, setRestoringConversation] = useState(false)
+  const conversationKey = 'aipollo:conversation:' + accountId + ':' + workspaceId
+  const [selection, setSelection] = useState<PlanSelection>()
+  const [learningPlans, setLearningPlans] = useState<{ plan_id: string; blueprint: { title: string } }[]>([])
+  const [showAllPlans, setShowAllPlans] = useState(false)
+  const [learningAction, setLearningAction] = useState<LearningAction>()
+  const [learningDays, setLearningDays] = useState(0)
+  const [commandPrefix, setCommandPrefix] = useState<string>()
+  const [selectingPlan, setSelectingPlan] = useState(false)
+  const [selectionRefresh, setSelectionRefresh] = useState(0)
+  useEffect(() => {
+    if (!features.learning_plans || !learningPlansVisible) return
+    let current = true
+    setSelection(conversation ? undefined : noSelection)
+    const refresh = [
+      api<typeof learningPlans>(base + '/learning-plans'),
+      conversation ? api<PlanSelection>(base + '/conversations/' + conversation + '/learning-plan') : Promise.resolve(noSelection),
+    ] as const
+    void Promise.all(refresh).then(([plans, selected]) => {
+      if (current) {
+        setLearningPlans(plans)
+        setSelection(selected)
+      }
+    }).catch(failure => { if (current) setError(errorMessage(failure)) })
+    return () => { current = false }
+  }, [base, conversation, features.learning_plans, learningPlansVisible, run?.result?.learning_plan_id, selectionRefresh])
   const [history, setHistory] = useState<Run[]>([])
   const [available, setAvailable] = useState<Conversation[]>()
   const [editing, setEditing] = useState(false)
@@ -145,7 +181,38 @@ export function InteractionPanel({
   const retryTarget = useRef<{ id: string; previous: Run } | null>(null)
   const retryRunIds = useRef(new Map<string, string>())
   const queryField = useRef<HTMLTextAreaElement>(null)
-  const locked = busy || activeId !== undefined || retryingId !== undefined
+  const locked = busy || restoringConversation || activeId !== undefined || retryingId !== undefined
+  useEffect(() => {
+    if (!features.learning_plans) return
+    let saved: string | null
+    try { saved = sessionStorage.getItem(conversationKey) } catch { return }
+    if (!saved || !identifier.test(saved)) return
+    const id = saved
+    let current = true
+    setRestoringConversation(true)
+    void api<Run[]>(base + '/conversations/' + id).then(turns => {
+      if (!current) return
+      setHistory(turns)
+      setConversation(id)
+    }).catch(failure => {
+      if (!current) return
+      if (failure instanceof ApiError && failure.status === 404) {
+        try { sessionStorage.removeItem(conversationKey) } catch { /* Storage is optional. */ }
+      } else {
+        setError(errorMessage(failure))
+      }
+    }).finally(() => { if (current) setRestoringConversation(false) })
+    return () => { current = false }
+  }, [base, conversationKey, features.learning_plans])
+
+  function rememberConversation(id?: string) {
+    setConversation(id)
+    if (!features.learning_plans) return
+    try {
+      if (id) sessionStorage.setItem(conversationKey, id)
+      else sessionStorage.removeItem(conversationKey)
+    } catch { /* This visit still works when storage is blocked. */ }
+  }
   const lastModeNonce = useRef(requestedMode?.nonce ?? 0)
   useEffect(() => {
     if (!requestedMode || requestedMode.nonce === lastModeNonce.current) return
@@ -153,29 +220,6 @@ export function InteractionPanel({
     if (locked || editing) return
     setMode(requestedMode.mode)
   }, [requestedMode, locked, editing])
-  const curriculumKey = 'aipollo.curriculum.' + workspaceId
-  useEffect(() => {
-    let current = true
-    let saved: string | null = null
-    try { saved = window.sessionStorage.getItem(curriculumKey) } catch { /* Storage may be disabled. */ }
-    if (saved && /^[a-f0-9-]{36}$/.test(saved)) {
-      void api<Plan>(base + '/plans/' + saved).then(value => {
-        if (!current) return
-        setPlan(value)
-        setMode('PLAN')
-      }).catch(() => {
-        try { window.sessionStorage.removeItem(curriculumKey) } catch { /* Storage may be disabled. */ }
-      })
-    }
-    return () => { current = false }
-  }, [base, curriculumKey])
-  useEffect(() => {
-    if (!plan) return
-    try {
-      if (plan.curriculum_days && plan.state !== 'CANCELLED') window.sessionStorage.setItem(curriculumKey, plan.plan_id)
-      else window.sessionStorage.removeItem(curriculumKey)
-    } catch { /* The plan remains usable without storage. */ }
-  }, [plan, curriculumKey])
   useEffect(() => {
     if (!plan || plan.state !== 'GENERATING') return
     let current = true
@@ -292,16 +336,41 @@ export function InteractionPanel({
       setHistory(prior => [...prior, run])
     }
     setRun(fresh)
-    setConversation(fresh.conversation_id ?? undefined)
+    rememberConversation(fresh.conversation_id ?? undefined)
     setActiveId(fresh.run_id)
   }
 
-  function submitRun(mode: 'ASK' | 'AGENT', objective: Objective, conversationId?: string, retryOfRunId?: string) {
+  function submitRun(mode: 'ASK' | 'AGENT', objective: Objective, conversationId?: string, retryOfRunId?: string,
+    learning?: { action?: LearningAction; days?: number; revision: number }) {
     return api<Run>(base + '/runs', 'POST', {
       mode, objective, conversation_id: mode === 'ASK' ? conversationId : undefined,
       retry_of_run_id: retryOfRunId,
       citation_mode: mode === 'ASK' && !retryOfRunId ? citationMode : undefined,
+      learning_action: learning?.action,
+      learning_days: learning?.days,
+      selection_revision: learning?.revision,
     }, crypto.randomUUID())
+  }
+
+  async function chooseLearningPlan(planId: string | null) {
+    if (!selection || selectingPlan) return
+    const body = { selected_plan_id: planId, selection_revision: selection.selection_revision }
+    setSelectingPlan(true)
+    setError('')
+    try {
+      if (conversation) {
+        setSelection(await api<PlanSelection>(base + '/conversations/' + conversation + '/learning-plan', 'PUT', body))
+      } else {
+        const created = await api<PlanSelection & { conversation_id: string }>(base + '/conversations', 'POST', body)
+        rememberConversation(created.conversation_id)
+        setSelection(created)
+      }
+    } catch (failure) {
+      setError(errorMessage(failure))
+      setSelectionRefresh(value => value + 1)
+    } finally {
+      setSelectingPlan(false)
+    }
   }
 
   async function retry(originalId: string, failed: Run) {
@@ -337,10 +406,19 @@ export function InteractionPanel({
       query: String(form.get('query')).trim(),
       document_ids,
       capability,
-      task: String(form.get('task')),
+      task: String(form.get('task') ?? 'answer'),
       ...(form.get('task') === 'mock_defense' ? { draft_document_id: String(form.get('draft_document_id')) } : {}),
     }
-    if (input.query.length < 2 || !input.document_ids.length || input.document_ids.length > 100) {
+    const learningAsk = features.learning_plans && mode === 'ASK' && input.capability === 'LEARN' && input.task === 'answer'
+    if (learningAsk && (!selection || selectingPlan)) return
+    const command = learningAsk ? input.query.match(/^\/(plan|edit-plan)(?:\s+|$)/i) : null
+    const action = command ? (command[1].toLowerCase() === 'plan' ? 'create' : 'edit') : learningAsk ? learningAction : undefined
+    if (command) input.query = input.query.slice(command[0].length).trim()
+    if (action === 'edit' && !selection?.selected_plan_id) {
+      setError('Select a Learning Plan to edit.')
+      return
+    }
+    if (input.query.length < 2 || (!input.document_ids.length && !learningAsk) || input.document_ids.length > 100) {
       setError('Enter a question and choose between 1 and 100 sources.')
       return
     }
@@ -365,7 +443,13 @@ export function InteractionPanel({
         setPlan(created)
         if (queryField.current && queryField.current === element.elements.namedItem('query')) queryField.current.value = ''
       } else {
-        const fresh = await submitRun(mode, input, conversation)
+        const fresh = await submitRun(mode, input, conversation, undefined, learningAsk ? {
+          action, days: action === 'create' ? learningDays || undefined : undefined,
+          revision: selection?.selection_revision ?? 0,
+        } : undefined)
+        setLearningAction(undefined)
+        setLearningDays(0)
+        setCommandPrefix(undefined)
         begin({ ...fresh, query: input.query })
         if (queryField.current && queryField.current === element.elements.namedItem('query')) queryField.current.value = ''
       }
@@ -413,7 +497,7 @@ export function InteractionPanel({
         const originalId = retryRunIds.current.get(turn.run_id)
         return !originalId || !visibleIds.has(originalId)
       }))
-      setConversation(item.conversation_id)
+      rememberConversation(item.conversation_id)
       setRun(undefined)
       setMode('ASK')
       onModeChange?.('ASK')
@@ -421,8 +505,10 @@ export function InteractionPanel({
   }
 
   function newChat() {
-    try { window.sessionStorage.removeItem(curriculumKey) } catch { /* Storage may be disabled. */ }
-    setConversation(undefined)
+    setLearningAction(undefined)
+    setLearningDays(0)
+    setCommandPrefix(undefined)
+    rememberConversation()
     setRun(undefined)
     setHistory([])
     setPlan(undefined)
@@ -433,6 +519,8 @@ export function InteractionPanel({
 
   function answers(original: Run) {
     const item = retries[original.run_id] ?? original
+    const result = item.result
+    const unsupported = result?.unsupported_parts ?? []
     const retryPending = retryingId === original.run_id
     const active = item.status === 'running' || item.status === 'queued'
     const composing = item.step === 'compose'
@@ -472,6 +560,13 @@ export function InteractionPanel({
         </section>}
         {item.result?.verified_draft && !!item.result.claims.length && <p className="badge badge-success">{text('Draft evidence checked · review before saving', 'Đã kiểm tra bằng chứng · xem nháp trước khi lưu')}</p>}
         {item.result?.tutor_question && <p className="source-excerpt">{item.result.tutor_question}</p>}
+        {item.result?.source_state === 'zero' && <p role="status">No sources selected.</p>}
+        {item.result?.source_state === 'empty' && <p role="status">No relevant passages were retrieved from the selected sources.</p>}
+        {item.result?.learning_reply && <p>{item.result.learning_reply}</p>}
+        {item.result?.learning_plan_id && <CreatedLearningPlan key={item.result.learning_plan_id} base={base} id={item.result.learning_plan_id}
+          onOpen={onOpenLearningPlan} refresh={selectionRefresh} visible={Boolean(learningPlansVisible || showHistory)} />}
+        {item.result?.learning_card && <LearningCard base={base} id={item.result.learning_card}
+          revisionSignal={run?.updated_at} onAccepted={() => setSelectionRefresh(value => value + 1)} />}
         {item.result?.kind === 'socratic_tutor' && <div className="actions">
           {(['hint', 'solution'] as const).map(action => <button key={action} type="button" className="secondary sm" disabled={locked}
             onClick={() => void perform(async () => {
@@ -512,17 +607,19 @@ export function InteractionPanel({
             </tr>)}</tbody>
           </table>
         </div>}
-        {item.result?.insufficient_evidence && <div className="approval-notice" role="status">
+        {item.result?.insufficient_evidence && !item.result.unsupported_parts?.length && <div className="approval-notice" role="status">
           <DesignIcon name="warning" /><div><strong>Not enough evidence in the selected sources</strong>
             <p>Choose more sources and try again.</p></div>
         </div>}
-        {!!item.result?.claims.length && <div className="assistant-response">
+        {result && (result.claims.length > 0 || unsupported.length > 0) && <div className="assistant-response">
           <div className="response-brand"><DesignIcon name="assistant" /> Super Agentic RAG</div>
-          {item.result.claims.map((claim, index) => (
+          {result.claims.map((claim, index) => (
             <div key={index} className="claim-row">
               <div className="claim-copy"><GeneratedContent text={claim.text} fields={claim.fields} kind={item.result?.kind} /></div>
-              {claim.source === 'conversation' ? <span className="badge badge-neutral">
-                {text('From this chat', 'Từ cuộc trò chuyện này')}
+              {claim.source && claim.source !== 'document' ? <span className="badge badge-neutral">
+                {claim.source === 'plan' ? text('From your Learning Plan', 'Từ kế hoạch học tập của bạn')
+                  : claim.source === 'general' ? text('General guidance', 'Hướng dẫn chung')
+                    : text('From this chat', 'Từ cuộc trò chuyện này')}
               </span> : <div className="claim-citations">
                 {claim.citations.filter(citation => documents.some(doc => doc.document_id === citation.document_id))
                   .map(citation => <button type="button" className="citation-pill" key={citation.citation_id ?? citation.chunk_id}
@@ -533,18 +630,20 @@ export function InteractionPanel({
               </div>}
             </div>
           ))}
+          {unsupported.map((part, index) => <p key={index} className="assistant-evidence-gap">{part}</p>)}
           <div className="response-actions">
           <button type="button" className="secondary sm" onClick={() => {
-            const content = item.result?.claims.map(claim => {
+            const claims = result.claims.map(claim => {
               const sources = claim.citations.map(citation => citation.name + ', page ' + citation.page).join('; ')
               return sources ? claim.text + ' (' + sources + ')' : claim.text
-            }).join('\n\n') ?? ''
+            })
+            const content = [...claims, ...unsupported].join('\n\n')
             void navigator.clipboard.writeText(content).then(() => setCopied(item.run_id))
               .catch(failure => setError(errorMessage(failure)))
           }}>{copied === item.run_id ? 'Copied' : 'Copy'}</button>
-          {canPublish && item.result.claims.some(claim => claim.citations.length > 0) && <details className="save-response">
+          {canPublish && result.claims.some(claim => claim.citations.length > 0) && <details className="save-response">
             <summary>{published === item.run_id ? 'Artifact saved' : 'Save as artifact'}</summary>
-            {item.result.claims.some(claim => claim.source === 'conversation') &&
+            {(unsupported.length > 0 || result.claims.some(claim => claim.source && claim.source !== 'document')) &&
               <p>{text('Only document-supported claims are saved.', 'Chỉ lưu các nội dung có nguồn tài liệu.')}</p>}
             <form className="inline-form" onSubmit={event => {
               event.preventDefault()
@@ -570,6 +669,21 @@ export function InteractionPanel({
 
   const effectiveMode = editing ? 'PLAN' : activeId && run?.interaction === 'PLAN' ? 'AGENT' : mode
   const currentMode = modes.find(item => item.value === effectiveMode) ?? modes[0]
+  const learningComposer = features.learning_plans && effectiveMode === 'ASK'
+  const selectedPlanId = selection?.selected_plan_id ?? ''
+  const visibleLearningPlans = showAllPlans ? learningPlans : learningPlans.filter((plan, index) =>
+    index < 3 || plan.plan_id === selectedPlanId)
+  const hiddenPlanCount = learningPlans.filter((plan, index) => index >= 3 && plan.plan_id !== selectedPlanId).length
+  const commands = ['/plan', '/edit-plan'] as const
+  function activateCommand(command: typeof commands[number]) {
+    setLearningAction(command === '/plan' ? 'create' : 'edit')
+    setLearningDays(0)
+    setCommandPrefix(undefined)
+    if (queryField.current) {
+      queryField.current.value = queryField.current.value.replace(/^\/[a-z-]+\s*/i, '')
+      queryField.current.focus()
+    }
+  }
   const visiblePlan = effectiveMode === 'PLAN' || run?.status === 'cancelled' ? plan : undefined
   function editPlan(target: Plan) {
     setCapability(target.objective.capability)
@@ -581,6 +695,27 @@ export function InteractionPanel({
 
   return (
     <section className="aipollo-assistant" aria-label="Workspace assistant" data-mode={effectiveMode}>
+      {features.learning_plans && learningPlanSlot && createPortal(
+        <fieldset className="workspace-plan-options"
+          disabled={!learningPlansVisible || !learningComposer || capability !== 'LEARN' || selectedTask !== 'answer' ||
+            !selection || selectingPlan || busy || restoringConversation}>
+          <legend>{text('Chat Learning Plan', 'Kế hoạch học tập cho chat')}</legend>
+          {[{ plan_id: '', blueprint: { title: text('No Plan', 'Không chọn kế hoạch') } }, ...visibleLearningPlans].map(plan =>
+            <label key={plan.plan_id} className="workspace-source workspace-plan-option" title={plan.blueprint.title}
+              data-checked={selectedPlanId === plan.plan_id}>
+              <input type="radio" name="chat-learning-plan" value={plan.plan_id} checked={selectedPlanId === plan.plan_id}
+                onChange={() => void chooseLearningPlan(plan.plan_id || null)} />
+              <span className="sidebar-ellipsis">{plan.blueprint.title}</span>
+            </label>)}
+          {(hiddenPlanCount > 0 || (showAllPlans && learningPlans.length > 3)) && <button className="workspace-nav-item" type="button"
+            aria-expanded={showAllPlans} onClick={() => setShowAllPlans(value => !value)}>
+            {showAllPlans ? text('Show less', 'Thu gọn') : text(`Show more (${hiddenPlanCount})`, `Xem thêm (${hiddenPlanCount})`)}
+          </button>}
+          {activeId && conversation && selection && !selectedPlanId && <button type="button"
+            className="workspace-nav-item" onClick={() => void chooseLearningPlan(null)}>
+            {text('Keep No Plan', 'Giữ Không chọn kế hoạch')}
+          </button>}
+        </fieldset>, learningPlanSlot)}
       <header className="aipollo-section-heading">
         <div><h1>{showHistory ? text('History', 'Lịch sử') : workspaceName}</h1><p>{showHistory ? workspaceName : text(currentMode.hint, currentMode.viHint)}</p></div>
         {!showHistory && <div className="assistant-heading-badges">
@@ -727,15 +862,47 @@ export function InteractionPanel({
       </div>
 
       <form hidden={showHistory} className="assistant-composer" onSubmit={submit} key={editing ? `edit-${plan?.plan_version}` : 'new-form'}>
+        {learningComposer && capability === 'LEARN' && selectedTask === 'answer' && learningAction === 'create' &&
+          <fieldset className="study-duration" disabled={locked}>
+            <legend>{text('How many days would you like to study?', 'Bạn muốn học trong bao nhiêu ngày?')}</legend>
+            <div className="study-duration-options">
+              {[0, 1, 2, 3, 4, 5, 6, 7].map(day => <label key={day}>
+                <input type="radio" name="study-duration" value={day} checked={learningDays === day}
+                  onChange={() => setLearningDays(day)} />
+                <span>{day === 0 ? text('Auto', 'Tự động') : text(day + (day === 1 ? ' day' : ' days'), day + ' ngày')}</span>
+              </label>)}
+            </div>
+          </fieldset>}
         <textarea ref={queryField} aria-label="Question or objective" name="query" minLength={2} maxLength={1800}
           required rows={2} disabled={locked} defaultValue={editing ? plan?.objective.query : ''}
+          onChange={event => {
+            if (!learningComposer || capability !== 'LEARN' || selectedTask !== 'answer') return
+            const command = event.currentTarget.value.match(/^\/(plan|edit-plan)\s/i)
+            if (command) {
+              activateCommand(command[1].toLowerCase() === 'plan' ? '/plan' : '/edit-plan')
+            } else {
+              const prefix = event.currentTarget.value.toLowerCase()
+              setCommandPrefix(commands.some(item => item.startsWith(prefix)) && prefix.startsWith('/') ? prefix : undefined)
+            }
+          }}
+          onKeyDown={event => { if (event.key === 'Escape') setCommandPrefix(undefined) }}
           placeholder={editing ? text('Tell the agent how to adjust this plan…', 'Cho biết cần điều chỉnh kế hoạch thế nào…')
-            : effectiveMode === 'PLAN' ? text('Describe the goal for your plan…', 'Mô tả mục tiêu của kế hoạch…') : text('Ask a question about your selected sources…', 'Đặt câu hỏi về các nguồn đã chọn…')} />
+            : effectiveMode === 'PLAN' ? text('Describe the goal for your plan…', 'Mô tả mục tiêu của kế hoạch…') : text('Ask a question or type / for commands…', 'Đặt câu hỏi hoặc gõ / để chọn lệnh…')} />
+        {learningComposer && commandPrefix && <div className="actions" role="group" aria-label="Learning Plan commands">
+          {commands.filter(command => command.startsWith(commandPrefix)).map(command =>
+            <button key={command} type="button" className="secondary sm" disabled={locked}
+              onClick={() => activateCommand(command)}>{command}</button>)}
+        </div>}
         <div className="composer-options">
           <div className="composer-modes" role="group" aria-label="Mode">
             {modes.map(item => <button key={item.value} type="button" disabled={editing || locked}
               aria-pressed={effectiveMode === item.value} onClick={() => {
                 setMode(item.value)
+                setCapability('LEARN')
+                setSelectedTask('answer')
+                setCommandPrefix(undefined)
+                setLearningAction(undefined)
+                setLearningDays(0)
                 onModeChange?.(item.value)
               }}>{text(item.label, item.vietnamese)}</button>)}
           </div>
@@ -754,7 +921,14 @@ export function InteractionPanel({
             </select>
           </label>}
           <span className="badge badge-neutral composer-source-count"><DesignIcon name="source-count" /> {selectedSources.length} sources</span>
-          <select aria-label="Capability" value={capability} disabled={locked}
+          {features.learning_plans && effectiveMode === 'ASK' && capability === 'LEARN' && selectedTask === 'answer' && <>
+            {selection?.unavailable && <span role="status">The previously selected Learning Plan is unavailable.</span>}
+            {learningAction && <button type="button" className="secondary sm" disabled={locked}
+              aria-label="Remove Learning Plan command" onClick={() => { setLearningAction(undefined); setLearningDays(0) }}>
+              {learningAction === 'create' ? '/plan' : '/edit-plan'} ×
+            </button>}
+          </>}
+          {!learningComposer && <><select aria-label="Capability" value={capability} disabled={locked}
             onChange={event => { setCapability(event.currentTarget.value as Capability); setSelectedTask('answer'); setCurriculumDays(0) }}>
             <option value="LEARN">Learn</option><option value="RESEARCH">Research</option><option value="WRITE">Write</option>
           </select>
@@ -762,7 +936,22 @@ export function InteractionPanel({
             value={['socratic_tutor', 'mock_defense'].includes(selectedTask) && effectiveMode !== 'ASK' ? 'answer' : selectedTask}
             onChange={event => setSelectedTask(event.currentTarget.value)}>
             {Object.entries(tasks[capability]).filter(([value]) => (value !== 'socratic_tutor' || (features.socratic_tutor && effectiveMode === 'ASK')) && (value !== 'mock_defense' || (features.mock_defense && effectiveMode === 'ASK'))).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
+          </select></>}
+          {learningComposer && (features.socratic_tutor || features.mock_defense) && <details>
+            <summary>{text('Specialized Ask', 'Hỏi chuyên biệt')}</summary>
+            <select aria-label="Specialized Ask" name="task" value={selectedTask} disabled={locked}
+              onChange={event => {
+                const task = event.currentTarget.value
+                setSelectedTask(task)
+                setCapability(task === 'mock_defense' ? 'RESEARCH' : 'LEARN')
+                setLearningAction(undefined)
+                setCommandPrefix(undefined)
+              }}>
+              <option value="answer">Answer</option>
+              {features.socratic_tutor && <option value="socratic_tutor">Socratic tutor</option>}
+              {features.mock_defense && <option value="mock_defense">Mock defense</option>}
+            </select>
+          </details>}
           {selectedTask === 'mock_defense' && effectiveMode === 'ASK' && <label>{text('Draft to review', 'Bản nháp cần phản biện')}
             <select name="draft_document_id" aria-label={text('Draft to review', 'Bản nháp cần phản biện')} required disabled={locked}>
               {selectedSources.map(id => <option value={id} key={id}>{documents.find(doc => doc.document_id === id)?.name ?? id}</option>)}
@@ -779,10 +968,11 @@ export function InteractionPanel({
                 }} /> {doc.name}
             </label>)}
           </details>
-          {conversation && !editing && <button type="button" disabled={locked} className="ghost sm" onClick={newChat}>New chat</button>}
+          {conversation && !editing && <button type="button" disabled={locked || selectingPlan} className="ghost sm" onClick={newChat}>New chat</button>}
           {editing && <button type="button" disabled={locked} className="secondary sm"
             onClick={() => setEditing(false)}>Cancel editing</button>}
-          <button type="submit" disabled={locked} className="composer-send"
+          <button type="submit" disabled={locked || (learningComposer && capability === 'LEARN' &&
+            selectedTask === 'answer' && (!selection || selectingPlan))} className="composer-send"
             aria-label={editing ? 'Save new version' : mode === 'PLAN' ? 'Create plan' : 'Send'}>
             <DesignIcon name="send" />
           </button>

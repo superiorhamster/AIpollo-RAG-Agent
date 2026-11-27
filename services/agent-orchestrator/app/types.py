@@ -23,6 +23,7 @@ Query = Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, ma
 
 
 class Objective(SourceSelection):
+    document_ids: list[UUID] = Field(max_length=100)
     query: Query
     capability: Capability = "LEARN"
     task: Task = "answer"
@@ -83,6 +84,7 @@ class WorkflowStep(BaseModel, extra="forbid"):
 
 
 class PlanDefinition(Objective):
+    document_ids: list[UUID] = Field(min_length=1, max_length=100)
     steps: list[WorkflowStep] | None = Field(default=None, min_length=1, max_length=6)
     curriculum_days: int | None = Field(default=None, ge=1, le=6)
 
@@ -134,6 +136,9 @@ class StartRun(BaseModel):
     conversation_id: UUID | None = None
     retry_of_run_id: UUID | None = None
     citation_mode: CitationMode | None = None
+    selection_revision: int | None = Field(default=None, strict=True, ge=0)
+    learning_action: Literal["create", "edit"] | None = None
+    learning_days: int | None = Field(default=None, strict=True, ge=1, le=7)
 
     @model_validator(mode="after")
     def require_mode_inputs(self):
@@ -150,6 +155,17 @@ class StartRun(BaseModel):
             raise ValueError("Only Ask accepts a citation mode")
         if self.mode != "ASK" and self.retry_of_run_id is not None:
             raise ValueError("Only Ask accepts a retry parent")
+        if (self.selection_revision is not None or self.learning_action is not None) and (
+            self.mode != "ASK" or self.objective is None
+            or self.objective.capability != "LEARN" or self.objective.task != "answer"
+        ):
+            raise ValueError("Learning Plan controls require Learning Ask")
+        if self.learning_days is not None and self.learning_action != "create":
+            raise ValueError("Fixed duration requires Learning Plan creation")
+        if self.retry_of_run_id is not None and any(
+            value is not None for value in (self.selection_revision, self.learning_action, self.learning_days)
+        ):
+            raise ValueError("Retry uses the original Learning Plan controls")
         return self
 
 
@@ -212,7 +228,7 @@ class CitedClaim(BaseModel):
     text: str
     fields: dict[FieldText, FieldText] = Field(default_factory=dict)
     citations: list[Citation]
-    source: Literal["document", "conversation"] = "document"
+    source: Literal["document", "conversation", "plan", "general"] = "document"
 
 
 class EvidenceCell(BaseModel):
@@ -232,6 +248,12 @@ class DefenseReview(BaseModel):
 
 
 class Answer(BaseModel):
+    learning_plan_id: UUID | None = None
+    learning_reply: str | None = None
+    learning_card: UUID | None = None
+    effective_citation_mode: CitationMode | None = None
+    source_state: Literal["zero", "empty", "found"] | None = None
+    unsupported_parts: list[str] | None = None
     defense_review: DefenseReview | None = None
     verified_draft: bool | None = None
     evidence_matrix: list[EvidenceCell] | None = Field(default=None, max_length=20)
@@ -300,6 +322,7 @@ class Conversation(BaseModel):
 
 
 class WorkflowFeatures(BaseModel):
+    learning_plans: bool = False
     custom_plan: bool
     socratic_tutor: bool
     curriculum: bool

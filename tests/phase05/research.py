@@ -129,14 +129,9 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             output = dict(claims=[dict(index=i,status='contradicted' if '99' in item['text'] else 'supported') for i,item in enumerate(payload['claims'])])
         return httpx.Response(200, json={'text': json.dumps(output)})
 
-    async def run_research(self, mode='AGENT'):
+    async def run_research(self):
         started_at, calls_before, searches_before = time.monotonic(), len(self.models), len(self.searches)
-        body = dict(mode=mode, objective=self.objective)
-        if mode == 'PLAN':
-            created = (await self.post('/plans', self.objective)).json()
-            self.assertEqual((await self.post('/plans/' + created['plan_id'] + '/accept', {'plan_version':1})).status_code, 200)
-            body = dict(mode='PLAN',plan_id=created['plan_id'],plan_version=1)
-        started = await self.post('/runs', body)
+        started = await self.post('/runs', dict(mode='AGENT', objective=self.objective))
         self.assertEqual(started.status_code,202,started.text)
         run = started.json()
         async with httpx.AsyncClient(transport=httpx.MockTransport(self.upstream)) as client:
@@ -149,8 +144,8 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
                                       searches=len(self.searches)-searches_before))
         return result
 
-    async def test_per_paper_coverage_gap_budget_and_acceptance(self):
-        result = await self.run_research('PLAN')
+    async def test_per_paper_coverage_and_gap_budget(self):
+        result = await self.run_research()
         self.assertEqual(result['status'],'succeeded',result)
         matrix = {(cell['document_id'],cell['criterion']):cell for cell in result['result']['evidence_matrix']}
         self.assertEqual(matrix[(str(self.b),'Dataset')]['status'],'supported')
@@ -198,7 +193,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
     async def test_verified_draft_repairs_unsupported_numbers_before_preview(self):
         self.objective = {**self.objective, 'capability': 'WRITE', 'task': 'draft', 'document_ids': [str(self.a)]}
         self.inject_unsupported = True
-        result = await self.run_research('PLAN')
+        result = await self.run_research()
         self.assertEqual(result['status'], 'succeeded', result)
         self.assertTrue(result['result']['verified_draft'])
         self.assertNotIn('99', ' '.join(claim['text'] for claim in result['result']['claims']))
@@ -315,19 +310,12 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((result['status'],result['error_code']),('failed','invalid_model_output'))
 
     async def test_duplicate_source_ids_do_not_expand_the_run_search_budget(self):
-        objective = {**self.objective, 'document_ids': [str(self.a)]*10 + [str(self.b)]*10}
-        steps = [dict(step_id=str(uuid4()), tool='compose', action='Compare scoped papers', objective=objective,
-                      expected_output='Verified findings') for _ in range(2)]
-        plan = (await self.post('/plans', {**objective,'steps':steps})).json()
-        self.assertEqual((await self.post('/plans/' + plan['plan_id'] + '/accept', {'plan_version':1})).status_code,200)
-        run = (await self.post('/runs', dict(mode='PLAN',plan_id=plan['plan_id'],plan_version=1))).json()
-        async with httpx.AsyncClient(transport=httpx.MockTransport(self.upstream)) as client:
-            worker = Worker(self.database,client)
-            await worker.execute(await worker.claim())
-        result = (await self.api.get(self.base + '/runs/' + run['run_id'])).json()
+        self.objective = {**self.objective, 'document_ids': [str(self.a)]*10 + [str(self.b)]*10}
+        result = await self.run_research()
         self.assertEqual(result['status'],'succeeded',result)
+        self.assertEqual(self.searches[:2], [str(self.a), str(self.b)])
         self.assertLessEqual(len(self.searches),4)
-        self.assertEqual(result['result']['budget_exhausted'],'generation_budget')
+        self.assertLessEqual(len(self.models), 12)
 
     async def test_matrix_checker_refutes_a_false_finding_with_a_valid_source_id(self):
         self.false_matrix_finding = True

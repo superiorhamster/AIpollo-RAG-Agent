@@ -1,0 +1,23 @@
+# Kết quả kiểm chứng đã ghi nhận
+
+Mốc bàn giao 27/11/2026. **PASS** áp dụng cho ca và tầng ghi trong bảng. **PARTIAL** nghĩa là có quan sát nhưng chưa đủ gate. **FAIL** ghi kết quả cụ thể không đạt, kể cả khi lượt sau đã khắc phục. **NOT RUN** dành cho ca chưa có lượt chạy. Owner acceptance áp dụng cho sản phẩm trong phạm vi quan sát. [Gate kỹ thuật](handoff.md) vẫn quyết định release.
+
+| Tầng / đợt | Trạng thái | Kết quả và giới hạn |
+| --- | --- | --- |
+| Unit | PASS theo ca | 9 blueprint/prompt tests ở Core, gồm canonical UTF-8 9.216 byte ±1, identity, day/duration, proposal và invalid output. Chưa bao phủ toàn bộ near-cap qua Gateway. |
+| API/DB | PASS theo ca | 11 Learning Plan cases trên PostgreSQL với transport deterministic, 15 Retry/API và legacy fence, 23 Ask/history regression. Gồm ACL có định danh, CAS/No Plan, stale, duplicate Accept, rollback khi fault, binding mục tiêu và Retry receipt. Cross-service race và ma trận ACL đầy đủ còn mở. |
+| Integration | PASS theo cấu hình | Synthetic 006→009 giữ legacy rows/citation; clean dev đến 009. Fixture integrated ingest 3 PDF, 4 tổ hợp Sources/Plan, Chunk/Segment PDF anchors, Fixed Create, Edit/Accept, completion và reload. 21 ca Research/Writing/Defense với simulated transport. Release migration/recovery matrix vẫn PARTIAL. |
+| Browser | PASS theo ca | Core 3 ca và UI cuối 4 ca Playwright có QA thật và fixture đúng tầng: Study Duration, hai chat, empty selected chat, No Plan, manager title/progress/validation/cancel, sidebar desktop/mobile, Create preview cuộn tới mục cuối, 404 an toàn và Copy. Có kiểm tra ảnh. Screen reader và long Change Preview đầy đủ NOT RUN. |
+| Live-provider development | PASS có phạm vi; FAIL lịch sử | Orchid kiểm chứng 420/60, Chunk/Segment anchors, Fixed Create, Edit, thiếu bằng chứng, mixed answer và Cedar/Birch sau sửa. Các lượt đầu đã sai verdict và synthesis; sửa và retest đúng ca. Một lượt long Edit thất bại exact equality; guard bỏ version echo chỉ khi trùng version đã pin. Historical live before/after tương ứng NOT RUN. |
+| Owner Preview và HarborDesk OOD | OWNER_ACCEPTED, có PARTIAL | UAT-01–08 corrective, UAT-09–12 behavior và Round 3 evidence UI kết thúc theo quyết định Owner. HarborDesk dùng corpus riêng ngoài tuning, ghi nhận Ask, Create/Edit, Plan-only, No Plan, tiến độ và ba trigger Completion. Sau Core, Owner xác nhận Study Duration, tạo đúng 5 ngày, reload, selection từng chat và empty chat có Plan, rồi chấp nhận UI cuối. Retry, progress persistence và mutation safety dựa vào evidence kỹ thuật riêng. |
+| CNN Architecture Lab rehearsal | PASS/PARTIAL theo ca | D01/D02 số liệu và highlight; D08–D11 Fixed Create, preview, Reject/Accept; D13/D14/D15 Plan-aware, Plan-only, No Plan; D16c proactive và ảnh manager 1/4; D18a negative; D17c/D18b/D19c đúng proposal ở các lượt quan sát. D03/D03b, D17b, D20 PARTIAL. D04–D07, D12, D21–D23 NOT RUN. 2/4, 3/4, 4/4 thiếu ảnh manager riêng; ảnh D16a/b bị cắt. Đây là diễn tập demo. [Kịch bản và đối chứng](cnn-demo.md) |
+| Main local dev smoke | PASS | 18 services healthy, 8 init/migration jobs thành công, Web/API readiness 200. Chrome xác minh login, workspace, controls, manual Plan save và selection sau reload; không submit generation. |
+
+## Giới hạn và rủi ro
+
+- **Semantic targeting:** HarborDesk explicit Day 2 từng nhắm Day 3; CNN D17b nhắm benchmark thay vì MobileNet dù lời giải thích đúng chủ đề. Reject và nêu chính xác objective đã phục hồi ở các lượt sau. Đây là rủi ro model đã ghi nhận; ACL, immutable target và state mutation vẫn bắt buộc.
+- **Synthesis:** HarborDesk có No-Go đúng nhưng thiếu liên kết giữa tài liệu. CNN Research profile có đáp án trong corpus, model có lượt lặp yêu cầu hoặc bỏ quy tắc xếp hạng. Nguyên nhân retrieval/packing/generation chưa được xác định. Orchid có lần nhắc lại chi phí hoặc recall quá phạm vi câu hỏi.
+- **Events và terminal:** recall xuyên chat thiếu mục tiêu đã hoàn thành; provenance có thể hiển thị From this chat. Terminal awareness có lượt chỉ nhắc mục cuối hoặc dùng provenance chưa chính xác. Không suy ra unauthorized context chỉ từ lời đáp.
+- **Citations:** một số reply lộ nhãn E1/E2…; nhiều pill làm hẹp đoạn văn. Các pill cùng trang có thể đại diện segment khác nhau. Kết quả highlight được xác nhận theo từng ca, không suy ra mọi citation đều đúng.
+- **08A:** lỗi lịch sử chưa biết chính xác subcase. G1 sửa History của selection-only chat, kiểm reload/chat switch bằng API và có Owner xác nhận lại. Extended multi-tab/revocation vẫn mở.
+- **Capacity và fidelity:** Plan hợp lệ gần trần có thể nhận `learning_input_capacity` ở Plan-aware Ask. Không có evidence đầy đủ cho mọi ngôn ngữ, mẫu input/output hoặc Gateway latency. FA03 giữ trạng thái PARTIAL. Chưa có final integrated release audit.

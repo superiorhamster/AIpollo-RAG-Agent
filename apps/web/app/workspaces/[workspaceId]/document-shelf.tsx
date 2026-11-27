@@ -13,6 +13,7 @@ import { AnnotatedPreview } from './annotated-preview'
 import { SourceSearch } from './source-search'
 import { AcademicLibrary } from './academic-library'
 import { InteractionPanel, type Mode } from './interaction-panel'
+import { LearningPlanManager } from './learning-plan-manager'
 import type { CitationTarget } from './pdf-preview'
 import { PANEL_BOUNDS, usePanelResize } from './use-panel-resize'
 import { ReaderDocumentBar, type RenameOutcome } from './reader-document-bar'
@@ -54,10 +55,11 @@ function summarizeDocumentJobs(doc: DocumentItem, jobs: Job[]): DocumentJobs {
   }
 }
 
-export function DocumentShelf({ workspace, workspaces, email, items, selected, initialPage, initialView }: {
+export function DocumentShelf({ workspace, workspaces, email, accountId, items, selected, initialPage, initialView }: {
   workspace: Workspace
   workspaces: Workspace[]
   email: string
+  accountId: string
   items: DocumentItem[]
   selected?: string
   initialPage: number
@@ -65,17 +67,27 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
 }) {
   const router = useRouter()
   const { language, text } = useWorkspaceLanguage()
-  const defaultView: WorkspaceView = initialView ?? (items.length ? 'chats' : 'library')
+  const defaultView: WorkspaceView = initialView === 'plans' ? 'chats' : initialView ?? (items.length ? 'chats' : 'library')
   const [documents, setDocuments] = useState(items)
   const [selectedId, setSelectedId] = useState<string | undefined>(selected ?? items[0]?.document_id)
   const [page, setPage] = useState(selected ? initialPage : 1)
   const [view, setView] = useState<WorkspaceView>(defaultView)
+  const [learningPlans, setLearningPlans] = useState(false)
+  const [learningPlanSlot, setLearningPlanSlot] = useState<HTMLDivElement | null>(null)
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false)
+  useEffect(() => {
+    let current = true
+    void api<{ learning_plans: boolean }>('/v1/workspaces/' + workspace.workspace_id + '/workflow-features')
+      .then(features => { if (current) setLearningPlans(features.learning_plans) })
+      .catch(() => { if (current) setLearningPlans(false) })
+    return () => { current = false }
+  }, [workspace.workspace_id])
   const [requestedMode, setRequestedMode] = useState<{ mode: 'ASK' | 'PLAN'; nonce: number }>(() => ({
-    mode: defaultView === 'plans' ? 'PLAN' : 'ASK',
-    nonce: defaultView === 'plans' ? 1 : 0,
+    mode: 'ASK',
+    nonce: 0,
   }))
   const [activeTab, setActiveTab] = useState<'assistant' | 'sources' | 'reader'>(
-    selected ? 'reader' : defaultView === 'chats' || defaultView === 'plans' || defaultView === 'history' ? 'assistant' : 'sources'
+    selected ? 'reader' : ['chats', 'history', 'learning-plans'].includes(defaultView) ? 'assistant' : 'sources'
   )
   const [selectedSources, setSelectedSources] = useState<string[]>([])
   const sourcesStorageKey = 'aipollo.selected-sources.' + workspace.workspace_id
@@ -119,6 +131,7 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
   const [error, setError] = useState('')
   const [pollError, setPollError] = useState(false)
   const [openedArtifact, setOpenedArtifact] = useState<string>()
+  const [openedLearningPlan, setOpenedLearningPlan] = useState<string>()
   const uploadKey = useRef<string | null>(null)
   const uploadForm = useRef<HTMLFormElement>(null)
   const workspaceBody = useRef<HTMLDivElement>(null)
@@ -412,11 +425,10 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
   }
 
   function navigate(next: WorkspaceView) {
+    setMobileNavigationOpen(false)
     setView(next)
-    setActiveTab(next === 'chats' || next === 'plans' || next === 'history' ? 'assistant' : 'sources')
-    if (next === 'plans') {
-      setRequestedMode(current => ({ mode: 'PLAN', nonce: current.nonce + 1 }))
-    } else if (next === 'chats') {
+    setActiveTab(['chats', 'learning-plans', 'history'].includes(next) ? 'assistant' : 'sources')
+    if (next === 'chats') {
       setRequestedMode(current => ({ mode: 'ASK', nonce: current.nonce + 1 }))
     }
   }
@@ -481,6 +493,12 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
             </button>
           ))}
         </nav>
+        {learningPlans && activeTab !== 'reader' && <button type="button" className="secondary sm workspace-mobile-nav-toggle"
+          aria-expanded={mobileNavigationOpen} aria-controls="workspace-navigation"
+          onClick={() => setMobileNavigationOpen(open => !open)}>
+          {mobileNavigationOpen ? text('Hide workspace navigation', 'Ẩn điều hướng không gian làm việc')
+            : text('Show workspace navigation', 'Mở điều hướng không gian làm việc')}
+        </button>}
 
         <div
           ref={workspaceBody}
@@ -494,6 +512,9 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
             workspace={workspace}
             workspaces={workspaces}
             mayWrite={mayWrite}
+            learningPlans={learningPlans}
+            onLearningPlanSlot={setLearningPlanSlot}
+            mobileOpen={mobileNavigationOpen && activeTab !== 'reader'}
             view={view}
             documents={documents}
             selectedId={selectedId}
@@ -523,7 +544,7 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
 
           <div id="panel-main" className="workspace-center" data-mobile-active={activeTab !== 'reader'}>
             <nav className="workspace-compact-nav" aria-label="Workspace sections">
-              {WORKSPACE_VIEWS.map(item => (
+              {WORKSPACE_VIEWS.filter(item => item.id !== 'learning-plans' || learningPlans).map(item => (
                 <button
                   className="workspace-nav-item"
                   key={item.id}
@@ -539,16 +560,22 @@ export function DocumentShelf({ workspace, workspaces, email, items, selected, i
             </nav>
             {!readerVisible && <button type="button" className="secondary sm reader-open"
               onClick={() => setReaderVisible(true)}><DesignIcon name="panel" /> Show reader</button>}
-            <div className="workspace-chat" hidden={view !== 'chats' && view !== 'plans' && view !== 'history'}>
-              <InteractionPanel workspaceId={workspace.workspace_id} workspaceName={workspace.name}
+            <div className="workspace-chat" hidden={view !== 'chats' && view !== 'history'}>
+              <InteractionPanel workspaceId={workspace.workspace_id} workspaceName={workspace.name} accountId={accountId}
                 documents={documents} readySources={readySources} selectedSources={selectedSources} setSelectedSources={setSelectedSources}
                 onSourcesLock={setSourcesLocked} showHistory={view === 'history'}
+                learningPlansVisible={view === 'chats'}
+                learningPlanSlot={learningPlanSlot}
                 requestedMode={requestedMode} onModeChange={handleAssistantModeChange}
-                canPublish={mayWrite} onCitation={openCitation} onOpenArtifact={id => {
+                canPublish={mayWrite} onCitation={openCitation} onOpenLearningPlan={id => {
+                  setOpenedLearningPlan(id)
+                  navigate('learning-plans')
+                }} onOpenArtifact={id => {
                   setOpenedArtifact(id)
                   navigate('artifacts')
                 }} />
             </div>
+            {learningPlans && view === 'learning-plans' && <LearningPlanManager workspaceId={workspace.workspace_id} initialPlanId={openedLearningPlan} />}
 
             <section className="aipollo-library form-stack" hidden={view !== 'library'} aria-labelledby="documents-heading">
               <header className="aipollo-section-heading">

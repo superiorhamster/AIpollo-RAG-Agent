@@ -18,6 +18,64 @@ class WorkspacePage {
   }
 }
 
+test('manual Learning Plan management works without opening a chat', async ({ page }, testInfo) => {
+  let saved: { plan_id: string; state_revision: number; blueprint: object } | undefined
+  const identifier = '19191919-1919-4919-8919-191919191919'
+  await page.route('**/workflow-features', route => route.fulfill({ json: { learning_plans: true } }))
+  await page.route('**/learning-plans**', async route => {
+    const request = route.request()
+    const method = request.method()
+    if (method === 'GET') return route.fulfill({ json: saved ? [saved] : [] })
+    if (method === 'DELETE') {
+      expect(request.postDataJSON()).toEqual({ revision: saved?.state_revision })
+      saved = undefined
+      return route.fulfill({ status: 204 })
+    }
+    const data = request.postDataJSON()
+    if (method === 'PUT') expect(data.revision).toBe(saved?.state_revision)
+    const blueprint = method === 'POST' ? data : data.blueprint
+    saved = {
+      plan_id: identifier, state_revision: (saved?.state_revision ?? 0) + 1,
+      blueprint: {
+        ...blueprint, objectives: blueprint.objectives.map((item: object) => ({ id: identifier, ...item })),
+      },
+    }
+    return route.fulfill({ status: method === 'POST' ? 201 : 200, json: saved })
+  })
+  const providerActions: string[] = []
+  page.on('request', request => {
+    if (request.method() === 'POST' && /\/runs$/.test(request.url())) providerActions.push(request.url())
+  })
+  await new WorkspacePage(page).open()
+  await page.getByRole('button', { name: 'Learning Plans', exact: true }).filter({ visible: true }).first().click()
+  const manager = page.getByRole('region', { name: 'Learning Plans' })
+  await expect(manager.getByText('No Learning Plans yet.')).toBeVisible()
+  await manager.getByRole('button', { name: 'New manual plan' }).click()
+  await manager.getByLabel('Plan name').fill('Compare fractions')
+  await manager.getByLabel('Learning goal').fill('Find a common denominator')
+  await manager.getByRole('button', { name: 'Add activity' }).click()
+  await manager.getByLabel('Activity 1').fill('Draw fraction bars')
+  await manager.getByRole('button', { name: 'Save plan' }).click()
+  await expect(manager.getByRole('button', { name: 'Compare fractions' })).toBeVisible()
+  await manager.getByRole('button', { name: 'Edit plan' }).click()
+  await manager.getByRole('checkbox', { name: 'Completed' }).check()
+  await manager.getByRole('button', { name: 'Save plan' }).click()
+  await expect(manager.getByText('1/1 complete')).toBeVisible()
+  await page.reload()
+  await page.getByRole('button', { name: 'Learning Plans', exact: true }).filter({ visible: true }).first().click()
+  await manager.getByRole('button', { name: 'Compare fractions' }).click()
+  await manager.getByRole('button', { name: 'Edit plan' }).click()
+  await expect(manager.getByRole('checkbox', { name: 'Completed' })).toBeChecked()
+  await page.screenshot({ path: testInfo.outputPath('learning-plans-desktop.png') })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(manager.getByRole('textbox', { name: 'Plan name' })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('learning-plans-mobile.png') })
+  await manager.getByRole('button', { name: 'Delete plan' }).click()
+  await manager.getByRole('button', { name: 'Confirm deletion' }).click()
+  await expect(manager.getByText('No Learning Plans yet.')).toBeVisible()
+  expect(providerActions).toEqual([])
+})
+
 test.beforeAll(async ({ browser, request }) => {
   const page = await browser.newPage()
   await page.setContent('<style>section{break-after:page;height:600px}</style><section>Page one</section><section>Page two: B4-201<br>Academic citation evidence line two<br>Nhắc lại: đọc kỹ tài liệu và trích dẫn.</section><section>Page three</section>')
@@ -138,45 +196,27 @@ test('status polling reports transient failure and recovers with backoff', async
   await expect(page.getByText('Could not update document status. Retrying with backoff.', { exact: true })).toHaveCount(0)
 })
 
-test('custom activities create a reviewable new plan version', async ({ page }) => {
-  let version = 1
-  const document = '44444444-4444-4444-8444-444444444444'
-  const planId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-  const objective = { query: 'Learn attention in three days', document_ids: [document], capability: 'LEARN', task: 'study_guide' }
-  let steps: { tool: string; action: string; objective?: typeof objective }[] = [
-    { tool: 'retrieve', action: 'Find the attention section' }, { tool: 'compose', action: 'Explain attention' },
-  ]
-  await page.route(/\/plans(?:\/[^/?]+)?(?:\?.*)?$/, route => {
-    const request = route.request()
-    if (request.method() === 'PATCH') {
-      const body = request.postDataJSON()
-      expect(body.expected_version).toBe(1)
-      expect(body.steps).toHaveLength(3)
-      expect(new Set(body.steps.map((step: { step_id: string }) => step.step_id)).size).toBe(3)
-      steps = body.steps
-      version = 2
-    }
-    return route.fulfill({ status: request.method() === 'POST' ? 201 : 200, contentType: 'application/json', body: JSON.stringify({
-      plan_id: planId, plan_version: version, objective, steps, expected_outputs: ['Cited explanation'], state: 'REVIEW', accepted_at: null,
-    }) })
+test('legacy Plan entry points stay inactive with legacy fixture flags enabled', async ({ page }) => {
+  const legacyRequests: string[] = []
+  await page.route('**/workflow-features', route => route.fulfill({ json: {
+    custom_plan: true, curriculum: true, learning_plans: true,
+  } }))
+  await page.route('**/learning-plans', route => route.fulfill({ json: [] }))
+  await page.route(/\/plans(?:\/[^?]*)?$/, route => {
+    legacyRequests.push(route.request().method() + ' ' + new URL(route.request().url()).pathname)
+    return route.fulfill({ status: 404, json: { code: 'not_found' } })
   })
-  const workspacePage = new WorkspacePage(page)
-  await workspacePage.open()
-  await page.getByRole('checkbox', { name: 'ready.pdf', exact: true }).check()
+  await new WorkspacePage(page).open()
+  // Saved links to the retired section must still land in the active Ask UI.
+  await page.goto('/workspaces/' + workspace + '?view=plans')
   const assistant = page.getByRole('region', { name: 'Workspace assistant' })
-  await assistant.getByRole('button', { name: 'Plan', exact: true }).click()
-  await assistant.getByLabel('Question or objective').fill(objective.query)
-  await assistant.getByRole('button', { name: 'Create plan', exact: true }).click()
-  await assistant.getByRole('button', { name: 'Customize activities', exact: true }).click()
-  await assistant.getByRole('button', { name: 'Add activity', exact: true }).click()
-  const source = assistant.getByRole('checkbox', { name: 'Activity source 3: ready.pdf', exact: true })
-  await source.uncheck()
-  await assistant.getByRole('button', { name: 'Save as new version', exact: true }).click()
-  await expect(assistant.getByText('Choose at least one source for each activity.', { exact: true })).toBeVisible()
-  await source.check()
-  await assistant.getByRole('button', { name: 'Save as new version', exact: true }).click()
-  await expect(assistant.getByRole('heading', { name: 'Plan version 2' })).toBeVisible()
-  await expect(assistant.getByRole('button', { name: 'Accept plan', exact: true })).toBeVisible()
+  const navigation = page.getByRole('complementary', { name: 'Workspace navigation' })
+  await expect(navigation.getByRole('button', { name: 'Learning Plans', exact: true })).toBeVisible()
+  await expect(navigation.getByRole('button', { name: 'Plans', exact: true })).toHaveCount(0)
+  await expect(assistant).toHaveAttribute('data-mode', 'ASK')
+  await expect(assistant.getByRole('button', { name: 'Plan', exact: true })).toHaveCount(0)
+  await expect(assistant.getByLabel('Study days')).toHaveCount(0)
+  expect(legacyRequests).toEqual([])
 })
 
 test('Socratic tutor keeps source scope for hints and solutions', async ({ page }) => {
@@ -215,53 +255,63 @@ test('Socratic tutor keeps source scope for hints and solutions', async ({ page 
   await expect.poll(() => turns).toBe(3)
 })
 
-test('curriculum survives reload and only a completed cited version can be accepted', async ({ page }) => {
+test('fixed Learning Plan Create survives reload without an approval step', async ({ page }) => {
   const document = '44444444-4444-4444-8444-444444444444'
   const planId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-  const objective = { query: 'Ôn Attention trong 3 ngày', document_ids: [document], capability: 'LEARN', task: 'study_guide' }
-  let ready = false
-  let accepted = false
-  const citation = { document_id: document, chunk_id: '77777777-7777-4777-8777-777777777777',
-    name: 'ready.pdf', page: 2, text: 'Attention', section: '', region: [.1, .1, .8, .2] }
-  await page.route(/\/plans(?:\/[^/?]+)?(?:\/accept)?$/, route => {
-    const request = route.request()
-    if (request.url().endsWith('/accept')) {
-      expect(ready).toBe(true)
-      expect(request.postDataJSON().plan_version).toBe(1)
-      accepted = true
-    } else if (request.method() === 'POST') {
-      expect(request.postDataJSON().curriculum_days).toBe(3)
-      expect(request.postDataJSON().task).toBe('study_guide')
-    }
-    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-      plan_id: planId, plan_version: 1, objective, curriculum_days: 3,
-      state: accepted ? 'ACCEPTED' : ready ? 'REVIEW' : 'GENERATING', generation_status: ready ? 'ready' : 'queued',
-      accepted_at: accepted ? new Date().toISOString() : null, generation_error: null,
-      steps: ready ? [1, 2, 3].map(day => ({ step_id: `bbbbbbbb-bbbb-4bbb-8bbb-${String(day).padStart(12, '0')}`,
-        day, tool: 'compose', action: 'Attention activity ' + day, objective,
-        expected_output: day === 3 ? 'Practice quiz' : 'Q/K/V explanation', citations: [citation] })) : [],
-      expected_outputs: ready ? ['Q/K/V explanation', 'Practice quiz'] : [],
-    }) })
+  const conversationId = '88888888-8888-4888-8888-888888888888'
+  const runId = '66666666-6666-4666-8666-666666666666'
+  const query = 'Learn how attention works'
+  const plan = { plan_id: planId, content_version: 1, state_revision: 1, blueprint: {
+    title: 'Attention study plan', days: 3,
+    objectives: [1, 2, 3].map(day => ({
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-' + String(day).padStart(12, '0'),
+      day, goal: 'Attention goal ' + day, activities: ['Review the example'], progress: 'pending',
+    })),
+  } }
+  const run = { run_id: runId, conversation_id: conversationId, interaction: 'ASK', status: 'succeeded', query,
+    result: { claims: [], insufficient_evidence: false, learning_plan_id: planId, learning_reply: 'Review one concept per day.' } }
+  let submissions = 0
+  await page.route('**/workflow-features', route => route.fulfill({ json: { learning_plans: true } }))
+  await page.route('**/learning-plans', route => route.fulfill({ json: submissions ? [plan] : [] }))
+  await page.route('**/learning-plans/' + planId, route => route.fulfill({ json: plan }))
+  await page.route('**/conversations/' + conversationId, route => route.fulfill({ json: [run] }))
+  await page.route('**/conversations/' + conversationId + '/learning-plan', route =>
+    route.fulfill({ json: { selected_plan_id: planId, selection_revision: 1 } }))
+  await page.route('**/runs/' + runId, route => route.fulfill({ json: run }))
+  await page.route('**/runs/' + runId + '/events', route =>
+    route.fulfill({ contentType: 'text/event-stream', body: 'data: ' + JSON.stringify(run) + '\n\n' }))
+  await page.route('**/runs', route => {
+    expect(route.request().method()).toBe('POST')
+    expect(route.request().postDataJSON()).toMatchObject({
+      mode: 'ASK', learning_action: 'create', learning_days: 3, selection_revision: 0,
+      objective: { query, document_ids: [document] },
+    })
+    submissions++
+    return route.fulfill({ status: 202, json: run })
   })
-  const workspacePage = new WorkspacePage(page)
-  await workspacePage.open()
+  await new WorkspacePage(page).open()
   await page.getByRole('checkbox', { name: 'ready.pdf', exact: true }).check()
   const assistant = page.getByRole('region', { name: 'Workspace assistant' })
-  await assistant.getByRole('button', { name: 'Plan', exact: true }).click()
-  await assistant.getByLabel('Study days').selectOption('3')
-  await assistant.getByLabel('Question or objective').fill(objective.query)
-  await assistant.getByRole('button', { name: 'Create plan', exact: true }).click()
-  await expect(assistant.getByText('Preparing schedule', { exact: true })).toBeVisible()
-  await expect(assistant.getByRole('button', { name: 'Accept plan', exact: true })).toHaveCount(0)
+  const composer = assistant.getByLabel('Question or objective')
+  await composer.fill('/plan ' + query)
+  await assistant.getByRole('group', { name: 'How many days would you like to study?' })
+    .getByRole('radio', { name: '3 days', exact: true }).check()
+  const card = assistant.getByRole('region', { name: 'Created Learning Plan' })
+  await expect(card).toHaveCount(0)
+  await assistant.getByRole('button', { name: 'Send', exact: true }).click()
+  const selected = page.getByRole('radio', { name: plan.blueprint.title, exact: true })
+  await expect(selected).toBeChecked()
   await page.reload()
-  await expect(assistant.getByText('Preparing schedule', { exact: true })).toBeVisible()
-  ready = true
-  await expect(assistant.getByText('Day 3:', { exact: true })).toBeVisible({ timeout: 10000 })
-  await assistant.getByRole('button', { name: 'ready.pdf, page 2' }).first().click()
-  await expect(page.getByRole('img', { name: 'PDF page 2', exact: true })).toBeVisible({ timeout: 15000 })
-  await expect(page.getByLabel('Citation highlight')).toBeVisible()
-  await assistant.getByRole('button', { name: 'Accept plan', exact: true }).click()
-  await expect(assistant.getByRole('button', { name: 'Run accepted plan', exact: true })).toBeVisible()
+  await expect(selected).toBeChecked()
+  await expect(assistant.getByText('Review one concept per day.', { exact: true })).toBeVisible()
+  await expect(card.getByText('3 days · 3 learning objectives', { exact: true })).toBeVisible()
+  await expect(card.getByRole('listitem')).toHaveText(['Attention goal 1', 'Attention goal 2', 'Attention goal 3'])
+  await expect(assistant.getByRole('button', { name: /Accept plan|Run accepted plan/i })).toHaveCount(0)
+  await card.getByRole('button', { name: 'Open Learning Plan' }).click()
+  const detail = page.getByRole('region', { name: 'Plan detail' })
+  await expect(detail.getByRole('heading', { name: plan.blueprint.title })).toBeVisible()
+  await expect(detail.getByRole('progressbar')).toHaveAttribute('value', '0')
+  expect(submissions).toBe(1)
 })
 
 test('deep research requires multiple papers and opens matrix evidence', async ({ page }) => {
@@ -1109,6 +1159,8 @@ test('workspace sidebar tree prevents overflow at 180px, separates open vs sourc
   const processingName = 'TàiLiệuĐangXửLýRấtDàiKhôngKhoảngTrắngChoBadge.pdf'
   const gw = process.env.UI_TEST_GATEWAY_URL ?? 'http://127.0.0.1:24001'
 
+  await page.route('**/workflow-features', route => route.fulfill({ json: { learning_plans: true } }))
+  await page.route('**/learning-plans', route => route.fulfill({ json: [] }))
   try {
     await page.request.post(gw + '/__fixture/research', {
       data: {
@@ -1140,23 +1192,23 @@ test('workspace sidebar tree prevents overflow at 180px, separates open vs sourc
     await expect(toggleB).toHaveAttribute('aria-expanded', 'false')
 
     // All 7 ordered sections render inside current workspace tree
-    const sectionLabels = await sidebar.getByRole('navigation', { name: 'Workspace sections' }).getByRole('button').allTextContents()
-    expect(sectionLabels.map(s => s.trim())).toEqual(['Chats', 'Documents', 'Notes', 'Plans', 'Artifacts', 'References', 'History'])
+    const sectionLabels = await sidebar.getByRole('navigation', { name: 'Workspace sections' }).getByRole('button').filter({ hasText: /\S/ }).allTextContents()
+    expect(sectionLabels.map(s => s.trim())).toEqual(['Chats', 'Documents', 'Notes', 'Learning Plans', 'Artifacts', 'References', 'History'])
 
     // Expanding collapsed secondary workspace via keyboard reveals its links without leaking Workspace A's docs
     const collapseB = sidebar.getByRole('button', { name: 'Collapse Workspace Nghiên Cứu Hai Không Có Khoảng TrắngDài', exact: true })
     await toggleB.focus()
     await toggleB.press('ArrowRight')
     await expect(collapseB).toHaveAttribute('aria-expanded', 'true')
-    await expect(sidebar.getByRole('navigation', { name: 'Workspace Nghiên Cứu Hai Không Có Khoảng TrắngDài' }).getByRole('link', { name: 'Plans', exact: true })).toBeVisible()
+    await expect(sidebar.getByRole('navigation', { name: 'Workspace Nghiên Cứu Hai Không Có Khoảng TrắngDài' }).getByRole('link', { name: 'Learning Plans', exact: true })).toBeVisible()
     await collapseB.press('ArrowLeft')
     await expect(toggleB).toHaveAttribute('aria-expanded', 'false')
 
-    // Documents opens Library; Plans opens PLAN mode; Notes opens Notes flow
+    // Sections open their own views without carrying state into Ask.
     await sidebar.getByRole('button', { name: 'Documents', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Library', exact: true })).toBeVisible()
-    await sidebar.getByRole('button', { name: 'Plans', exact: true }).click()
-    await expect(page.getByRole('region', { name: 'Workspace assistant' })).toHaveAttribute('data-mode', 'PLAN')
+    await sidebar.getByRole('button', { name: 'Learning Plans', exact: true }).click()
+    await expect(page.getByRole('region', { name: 'Learning Plans' }).getByText('No Learning Plans yet.')).toBeVisible()
     await sidebar.getByRole('button', { name: 'Notes', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Notes', exact: true })).toBeVisible()
     await sidebar.getByRole('button', { name: 'Chats', exact: true }).click()
@@ -1235,7 +1287,7 @@ test('workspace sidebar tree prevents overflow at 180px, separates open vs sourc
     await page.setViewportSize({ width: 375, height: 667 })
     await page.getByRole('tab', { name: 'Sources', exact: true }).click()
     await expect(page.locator('.workspace-compact-nav').getByRole('button', { name: 'Documents', exact: true })).toBeVisible()
-    await expect(page.locator('.workspace-compact-nav').getByRole('button', { name: 'Plans', exact: true })).toBeVisible()
+    await expect(page.locator('.workspace-compact-nav').getByRole('button', { name: 'Learning Plans', exact: true })).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy()
     await page.screenshot({ path: 'test-results/sidebar-tree-mobile.png' })
   } finally {
